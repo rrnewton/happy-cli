@@ -17,9 +17,9 @@ interface SessionResponse {
     agentState: string | null;  // Base64 encrypted
     agentStateVersion: number;
     active: boolean;
-    lastActiveAt: string;
-    createdAt: string;
-    updatedAt: string;
+    activeAt: number;  // Unix timestamp in milliseconds
+    createdAt: number;
+    updatedAt: number;
 }
 
 interface Metadata {
@@ -111,7 +111,7 @@ export async function listSessions(credentials: Credentials): Promise<void> {
             console.log(`  Working Directory: ${workingDir}`);
             console.log(`  Host: ${host}`);
             console.log(`  Status: ${thinking}`);
-            console.log(`  Last Active: ${new Date(session.lastActiveAt).toLocaleString()}`);
+            console.log(`  Last Active: ${new Date(session.activeAt).toLocaleString()}`);
             console.log('');
         }
     } catch (error) {
