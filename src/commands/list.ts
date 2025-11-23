@@ -9,6 +9,9 @@ import { Credentials } from '@/persistence';
 import axios from 'axios';
 import { decrypt, decodeBase64 } from '@/api/encryption';
 import { logger } from '@/ui/logger';
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 interface SessionResponse {
     id: string;
@@ -32,6 +35,50 @@ interface Metadata {
 interface AgentState {
     thinking?: boolean;
     [key: string]: any;
+}
+
+/**
+ * Get current working directory from Claude session file
+ */
+function getCurrentWorkingDirectory(claudeSessionId: string, spawnDirectory: string): string {
+    try {
+        const homeDir = homedir();
+        const claudeProjectsDir = join(homeDir, '.claude', 'projects');
+
+        if (!existsSync(claudeProjectsDir)) {
+            return spawnDirectory;
+        }
+
+        // Find all project directories
+        const projectDirs = readdirSync(claudeProjectsDir)
+            .map(name => join(claudeProjectsDir, name))
+            .filter(path => statSync(path).isDirectory());
+
+        // Search for the session file
+        for (const projectDir of projectDirs) {
+            const sessionFile = join(projectDir, `${claudeSessionId}.jsonl`);
+            if (existsSync(sessionFile)) {
+                // Read the last line to get current working directory
+                const content = readFileSync(sessionFile, 'utf8');
+                const lines = content.trim().split('\n');
+                const lastLine = lines[lines.length - 1];
+
+                try {
+                    const lastMessage = JSON.parse(lastLine);
+                    if (lastMessage.cwd) {
+                        return lastMessage.cwd;
+                    }
+                } catch (e) {
+                    logger.debug(`Failed to parse last line of session file ${sessionFile}:`, e);
+                }
+            }
+        }
+    } catch (error) {
+        logger.debug(`Failed to get current working directory for session ${claudeSessionId}:`, error);
+    }
+
+    // Fall back to spawn directory
+    return spawnDirectory;
 }
 
 /**
@@ -94,6 +141,8 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                     );
                     if (decrypted) {
                         agentState = decrypted;
+                        // Debug: log agentState structure
+                        logger.debug(`Agent state for ${session.id}:`, JSON.stringify(agentState, null, 2));
                     }
                 } catch (error) {
                     logger.debug(`Failed to decrypt agent state for session ${session.id}:`, error);
@@ -102,9 +151,17 @@ export async function listSessions(credentials: Credentials): Promise<void> {
 
             // Format and display session info
             const title = metadata.title || '(Untitled)';
-            const workingDir = metadata.path || '(Unknown)';
             const host = metadata.host || '(Unknown)';
             const thinking = agentState.thinking ? '🤔 Thinking' : '💤 Idle';
+
+            // Get current working directory - prefer live cwd from Claude session file
+            let workingDir = metadata.path || '(Unknown)';
+            logger.debug(`Session ${session.id} - claudeSessionId: ${metadata.claudeSessionId}, path: ${metadata.path}`);
+            if (metadata.claudeSessionId && metadata.path) {
+                const currentCwd = getCurrentWorkingDirectory(metadata.claudeSessionId, metadata.path);
+                logger.debug(`  Found current cwd: ${currentCwd}`);
+                workingDir = currentCwd;
+            }
 
             console.log(`  ID: ${session.id}`);
             console.log(`  Title: ${title}`);
