@@ -141,8 +141,6 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                     );
                     if (decrypted) {
                         agentState = decrypted;
-                        // Debug: log agentState structure
-                        logger.debug(`Agent state for ${session.id}:`, JSON.stringify(agentState, null, 2));
                     }
                 } catch (error) {
                     logger.debug(`Failed to decrypt agent state for session ${session.id}:`, error);
@@ -156,11 +154,8 @@ export async function listSessions(credentials: Credentials): Promise<void> {
 
             // Get current working directory - prefer live cwd from Claude session file
             let workingDir = metadata.path || '(Unknown)';
-            logger.debug(`Session ${session.id} - claudeSessionId: ${metadata.claudeSessionId}, path: ${metadata.path}`);
             if (metadata.claudeSessionId && metadata.path) {
-                const currentCwd = getCurrentWorkingDirectory(metadata.claudeSessionId, metadata.path);
-                logger.debug(`  Found current cwd: ${currentCwd}`);
-                workingDir = currentCwd;
+                workingDir = getCurrentWorkingDirectory(metadata.claudeSessionId, metadata.path);
             }
 
             console.log(`  ID: ${session.id}`);
