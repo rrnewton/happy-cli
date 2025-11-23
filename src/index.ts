@@ -128,6 +128,59 @@ import { execFileSync } from 'node:child_process'
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'list') {
+    // List active sessions
+    try {
+      const { credentials } = await authAndSetupMachineIfNeeded();
+      const { listSessions } = await import('@/commands/list');
+      await listSessions(credentials);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
+  } else if (subcommand === 'prompt') {
+    // Send prompt to session
+    try {
+      const { credentials } = await authAndSetupMachineIfNeeded();
+      const { promptSession } = await import('@/commands/prompt');
+
+      // Parse arguments
+      let sessionId: string | null = null;
+      let promptText: string | null = null;
+
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '-s' || args[i] === '--session') {
+          sessionId = args[++i];
+        } else if (args[i] === '-p' || args[i] === '--prompt') {
+          promptText = args[++i];
+        }
+      }
+
+      if (!sessionId) {
+        console.error('Session ID required. Use -s or --session to specify session ID.');
+        console.error('Example: happy prompt -s <session-id> -p "your prompt here"');
+        process.exit(1);
+      }
+
+      if (!promptText) {
+        console.error('Prompt text required. Use -p or --prompt to specify prompt text.');
+        console.error('Example: happy prompt -s <session-id> -p "your prompt here"');
+        process.exit(1);
+      }
+
+      await promptSession(credentials, sessionId, promptText);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'daemon') {
     // Show daemon management help
     const daemonSubcommand = args[1]
