@@ -3,7 +3,7 @@ import { logger } from '@/ui/logger'
 import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
-import { decodeBase64, encodeBase64, getRandomBytes, encrypt, decrypt, libsodiumEncryptForPublicKey } from './encryption';
+import { decodeBase64, encodeBase64, encrypt, decrypt, libsodiumEncryptForPublicKey } from './encryption';
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
@@ -32,23 +32,13 @@ export class ApiClient {
     state: AgentState | null
   }): Promise<Session> {
 
-    // Resolve encryption key
-    let dataEncryptionKey: Uint8Array | null = null;
+    // Resolve encryption key - use machineKey directly for all sessions on this machine
     let encryptionKey: Uint8Array;
     let encryptionVariant: 'legacy' | 'dataKey';
     if (this.credential.encryption.type === 'dataKey') {
-
-      // Generate new encryption key
-      encryptionKey = getRandomBytes(32);
+      // Use machineKey directly - allows any process on this machine to decrypt
+      encryptionKey = this.credential.encryption.machineKey;
       encryptionVariant = 'dataKey';
-
-      // Derive and encrypt data encryption key
-      // const contentDataKey = await deriveKey(this.secret, 'Happy EnCoder', ['content']);
-      // const publicKey = libsodiumPublicKeyFromSecretKey(contentDataKey);
-      let encryptedDataKey = libsodiumEncryptForPublicKey(encryptionKey, this.credential.encryption.publicKey);
-      dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
-      dataEncryptionKey.set([0], 0); // Version byte
-      dataEncryptionKey.set(encryptedDataKey, 1); // Data key
     } else {
       encryptionKey = this.credential.encryption.secret;
       encryptionVariant = 'legacy';
@@ -62,7 +52,7 @@ export class ApiClient {
           tag: opts.tag,
           metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
           agentState: opts.state ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.state)) : null,
-          dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : null,
+          dataEncryptionKey: null,
         },
         {
           headers: {
@@ -102,18 +92,13 @@ export class ApiClient {
     daemonState?: DaemonState,
   }): Promise<Machine> {
 
-    // Resolve encryption key
-    let dataEncryptionKey: Uint8Array | null = null;
+    // Resolve encryption key - use machineKey directly
     let encryptionKey: Uint8Array;
     let encryptionVariant: 'legacy' | 'dataKey';
     if (this.credential.encryption.type === 'dataKey') {
-      // Encrypt data encryption key
+      // Use machineKey directly
       encryptionVariant = 'dataKey';
       encryptionKey = this.credential.encryption.machineKey;
-      let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, this.credential.encryption.publicKey);
-      dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
-      dataEncryptionKey.set([0], 0); // Version byte
-      dataEncryptionKey.set(encryptedDataKey, 1); // Data key
     } else {
       // Legacy encryption
       encryptionKey = this.credential.encryption.secret;
@@ -127,7 +112,7 @@ export class ApiClient {
         id: opts.machineId,
         metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
         daemonState: opts.daemonState ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.daemonState)) : undefined,
-        dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : undefined
+        dataEncryptionKey: null
       },
       {
         headers: {
