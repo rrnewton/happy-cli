@@ -349,6 +349,8 @@ ${chalk.bold('Usage:')}
   happy auth              Manage authentication
   happy codex             Start Codex mode
   happy connect           Connect AI vendor API keys
+  happy list              List active Claude sessions
+  happy prompt            Send prompt to a session
   happy notify            Send push notification
   happy daemon            Manage background service that allows
                             to spawn new sessions away from your computer
@@ -356,8 +358,11 @@ ${chalk.bold('Usage:')}
 
 ${chalk.bold('Examples:')}
   happy                    Start session
-  happy --yolo             Start with bypassing permissions 
+  happy --yolo             Start with bypassing permissions
                             happy sugar for --dangerously-skip-permissions
+  happy list               List all active sessions
+  happy prompt -s <id> -p "prompt text"
+                           Send prompt to session
   happy auth login --force Authenticate
   happy doctor             Run diagnostics
 

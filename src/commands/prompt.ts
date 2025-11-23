@@ -67,11 +67,14 @@ export async function promptSession(credentials: Credentials, sessionId: string,
                 const key = credentials.encryption.type === 'legacy'
                     ? credentials.encryption.secret
                     : credentials.encryption.machineKey;
-                agentState = decrypt(
+                const decrypted = decrypt(
                     key,
                     credentials.encryption.type,
                     decodeBase64(session.agentState)
                 );
+                if (decrypted) {
+                    agentState = decrypted;
+                }
             } catch (error) {
                 logger.debug(`Failed to decrypt agent state for session ${sessionId}:`, error);
             }
@@ -132,6 +135,11 @@ export async function promptSession(credentials: Credentials, sessionId: string,
                         decodeBase64(data.body.message.content.c)
                     );
 
+                    if (!content) {
+                        logger.debug('Failed to decrypt message content');
+                        return;
+                    }
+
                     // Display agent output messages
                     if (content.role === 'agent' && content.content?.type === 'output') {
                         const output = content.content.data;
@@ -167,7 +175,9 @@ export async function promptSession(credentials: Credentials, sessionId: string,
                             credentials.encryption.type,
                             decodeBase64(data.body.agentState.value)
                         );
-                        logger.debug(`[prompt] Agent state updated: thinking=${updatedState.thinking}`);
+                        if (updatedState) {
+                            logger.debug(`[prompt] Agent state updated: thinking=${updatedState.thinking}`);
+                        }
                     }
                 } catch (error) {
                     logger.debug('Failed to decrypt agent state:', error);

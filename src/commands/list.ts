@@ -68,11 +68,14 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                     const key = credentials.encryption.type === 'legacy'
                         ? credentials.encryption.secret
                         : credentials.encryption.machineKey;
-                    metadata = decrypt(
+                    const decrypted = decrypt(
                         key,
                         credentials.encryption.type,
                         decodeBase64(session.metadata)
                     );
+                    if (decrypted) {
+                        metadata = decrypted;
+                    }
                 } catch (error) {
                     logger.debug(`Failed to decrypt metadata for session ${session.id}:`, error);
                 }
@@ -84,11 +87,14 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                     const key = credentials.encryption.type === 'legacy'
                         ? credentials.encryption.secret
                         : credentials.encryption.machineKey;
-                    agentState = decrypt(
+                    const decrypted = decrypt(
                         key,
                         credentials.encryption.type,
                         decodeBase64(session.agentState)
                     );
+                    if (decrypted) {
+                        agentState = decrypted;
+                    }
                 } catch (error) {
                     logger.debug(`Failed to decrypt agent state for session ${session.id}:`, error);
                 }
