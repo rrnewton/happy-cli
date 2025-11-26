@@ -30,8 +30,12 @@ interface SessionResponse {
 
 interface Metadata {
     path?: string;
-    title?: string;
     host?: string;
+    summary?: {
+        text: string;
+        updatedAt: number;
+    };
+    claudeSessionId?: string;
     [key: string]: any;
 }
 
@@ -237,7 +241,16 @@ export async function listSessions(credentials: Credentials): Promise<void> {
             }
 
             // Format and display session info
-            const title = metadata.title || '(Untitled)';
+            // Title priority: summary.text > last path segment > (Untitled)
+            let title = '(Untitled)';
+            if (metadata.summary?.text) {
+                title = metadata.summary.text;
+            } else if (metadata.path) {
+                const segments = metadata.path.split('/').filter(Boolean);
+                if (segments.length > 0) {
+                    title = segments[segments.length - 1];
+                }
+            }
             const host = metadata.host || '(Unknown)';
             const thinking = agentState.thinking ? '🤔 Thinking' : '💤 Idle';
 
