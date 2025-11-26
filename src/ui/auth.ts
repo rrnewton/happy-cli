@@ -175,7 +175,7 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
                         } else {
                             if (decrypted[0] === 0) {
                                 const credentials = {
-                                    publicKey: decrypted.slice(1, 33),
+                                    dataKeySeed: decrypted.slice(1, 33),
                                     machineKey: randomBytes(32),
                                     token: token
                                 }
@@ -184,7 +184,7 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
                                 return {
                                     encryption: {
                                         type: 'dataKey',
-                                        publicKey: credentials.publicKey,
+                                        dataKeySeed: credentials.dataKeySeed,
                                         machineKey: credentials.machineKey
                                     },
                                     token: token

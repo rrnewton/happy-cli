@@ -134,11 +134,14 @@ export async function updateSettings(
 // Authentication
 //
 
+// File schema for access.key JSON
+// NOTE: The "publicKey" field in the file is actually a seed used to derive the encryption keypair.
+// We keep the field name for backward compatibility with existing credential files.
 const credentialsSchema = z.object({
   token: z.string(),
   secret: z.string().base64().nullish(), // Legacy
   encryption: z.object({
-    publicKey: z.string().base64(),
+    publicKey: z.string().base64(),  // Actually a seed, not a public key (legacy naming)
     machineKey: z.string().base64()
   }).nullish()
 })
@@ -148,7 +151,10 @@ export type Credentials = {
   encryption: {
     type: 'legacy', secret: Uint8Array
   } | {
-    type: 'dataKey', publicKey: Uint8Array, machineKey: Uint8Array
+    // dataKeySeed: The seed used to derive the Curve25519 keypair for content encryption.
+    // This is NOT a public key - it's a 32-byte seed that gets hashed (SHA-512) to produce
+    // the secret key, from which the public key is then derived.
+    type: 'dataKey', dataKeySeed: Uint8Array, machineKey: Uint8Array
   }
 }
 
@@ -172,7 +178,8 @@ export async function readCredentials(): Promise<Credentials | null> {
         token: credentials.token,
         encryption: {
           type: 'dataKey',
-          publicKey: new Uint8Array(Buffer.from(credentials.encryption.publicKey, 'base64')),
+          // Map file's "publicKey" field to properly named "dataKeySeed" in memory
+          dataKeySeed: new Uint8Array(Buffer.from(credentials.encryption.publicKey, 'base64')),
           machineKey: new Uint8Array(Buffer.from(credentials.encryption.machineKey, 'base64'))
         }
       }
@@ -193,12 +200,13 @@ export async function writeCredentialsLegacy(credentials: { secret: Uint8Array, 
   }, null, 2));
 }
 
-export async function writeCredentialsDataKey(credentials: { publicKey: Uint8Array, machineKey: Uint8Array, token: string }): Promise<void> {
+export async function writeCredentialsDataKey(credentials: { dataKeySeed: Uint8Array, machineKey: Uint8Array, token: string }): Promise<void> {
   if (!existsSync(configuration.happyHomeDir)) {
     await mkdir(configuration.happyHomeDir, { recursive: true })
   }
+  // Write to file with "publicKey" field name for backward compatibility
   await writeFile(configuration.privateKeyFile, JSON.stringify({
-    encryption: { publicKey: encodeBase64(credentials.publicKey), machineKey: encodeBase64(credentials.machineKey) },
+    encryption: { publicKey: encodeBase64(credentials.dataKeySeed), machineKey: encodeBase64(credentials.machineKey) },
     token: credentials.token
   }, null, 2));
 }

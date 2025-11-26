@@ -42,9 +42,8 @@ export class ApiClient {
       encryptionKey = this.credential.encryption.machineKey;
       encryptionVariant = 'dataKey';
 
-      // IMPORTANT: The publicKey field actually contains the contentDataKey SEED, not a public key!
-      // We need to derive the actual Curve25519 public key from this seed before encrypting
-      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.publicKey);
+      // Derive the actual Curve25519 public key from the seed
+      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.dataKeySeed);
 
       // Encrypt machineKey for the derived public key so web client can decrypt it
       let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, derivedPublicKey);
@@ -114,9 +113,8 @@ export class ApiClient {
       encryptionVariant = 'dataKey';
       encryptionKey = this.credential.encryption.machineKey;
 
-      // IMPORTANT: The publicKey field actually contains the contentDataKey SEED, not a public key!
-      // We need to derive the actual Curve25519 public key from this seed before encrypting
-      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.publicKey);
+      // Derive the actual Curve25519 public key from the seed
+      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.dataKeySeed);
 
       // Encrypt machineKey for the derived public key so web client can decrypt it
       let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, derivedPublicKey);
