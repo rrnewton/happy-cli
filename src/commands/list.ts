@@ -7,11 +7,13 @@
 import { configuration } from '@/configuration';
 import { Credentials } from '@/persistence';
 import axios from 'axios';
-import { decrypt, decodeBase64 } from '@/api/encryption';
+import { decrypt, decodeBase64, libsodiumDecryptFromPublicKey, libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { logger } from '@/ui/logger';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { createHash } from 'crypto';
+import tweetnacl from 'tweetnacl';
 
 interface SessionResponse {
     id: string;
@@ -23,6 +25,7 @@ interface SessionResponse {
     activeAt: number;  // Unix timestamp in milliseconds
     createdAt: number;
     updatedAt: number;
+    dataEncryptionKey: string | null;  // Base64 encrypted encryption key
 }
 
 interface Metadata {
@@ -35,6 +38,49 @@ interface Metadata {
 interface AgentState {
     thinking?: boolean;
     [key: string]: any;
+}
+
+/**
+ * Decrypt a dataEncryptionKey using the user's public key credentials
+ */
+function decryptDataEncryptionKey(encryptedKey: string, credentials: Credentials): Uint8Array | null {
+    try {
+        logger.debug(`Attempting to decrypt dataEncryptionKey...`);
+        logger.debug(`Credentials type: ${credentials.encryption.type}`);
+
+        if (credentials.encryption.type !== 'dataKey') {
+            logger.debug(`Credentials type is not 'dataKey', returning null`);
+            return null;
+        }
+
+        const encryptedBundle = decodeBase64(encryptedKey);
+        logger.debug(`Encrypted bundle length: ${encryptedBundle.length}`);
+        logger.debug(`Version byte: ${encryptedBundle[0]}`);
+
+        if (encryptedBundle.length === 0 || encryptedBundle[0] !== 0) {
+            logger.debug(`Invalid version or empty bundle`);
+            return null; // Invalid version or empty
+        }
+
+        // Remove version byte and decrypt the rest
+        const bundleWithoutVersion = encryptedBundle.slice(1);
+        logger.debug(`Bundle without version length: ${bundleWithoutVersion.length}`);
+
+        // The publicKey field is actually the contentDataKey seed from the web client
+        // Derive the keypair from this seed using libsodium's crypto_box_seed_keypair approach
+        const keypair = tweetnacl.box.keyPair.fromSecretKey(
+            new Uint8Array(createHash('sha512').update(credentials.encryption.publicKey).digest()).slice(0, 32)
+        );
+        logger.debug(`Derived keypair from publicKey seed`);
+
+        // Decrypt using the derived secret key
+        const decrypted = libsodiumDecryptFromPublicKey(bundleWithoutVersion, keypair.secretKey);
+        logger.debug(`Decryption result: ${decrypted ? `success (${decrypted.length} bytes)` : 'null'}`);
+        return decrypted;
+    } catch (error) {
+        logger.debug(`Failed to decrypt dataEncryptionKey:`, error);
+        return null;
+    }
 }
 
 /**
@@ -106,37 +152,76 @@ export async function listSessions(credentials: Credentials): Promise<void> {
 
         // Display each session
         for (const session of sessions) {
+            logger.debug(`\n=== Processing session ${session.id} ===`);
+            logger.debug(`Has dataEncryptionKey: ${!!session.dataEncryptionKey}`);
+            logger.debug(`Has metadata: ${!!session.metadata}`);
+
             let metadata: Metadata = {};
             let agentState: AgentState = {};
 
-            // Decrypt metadata if present
-            if (session.metadata) {
+            // Determine the encryption key to use
+            // Priority: dataEncryptionKey (web/mobile sessions) > machineKey (CLI sessions) > secret (legacy)
+            let encryptionKey: Uint8Array | null = null;
+            let encryptionVariant: 'legacy' | 'dataKey' = 'dataKey';
+
+            if (session.dataEncryptionKey) {
+                logger.debug(`Session has dataEncryptionKey, attempting to decrypt...`);
+                // Web/mobile session - decrypt the dataEncryptionKey first
+                encryptionKey = decryptDataEncryptionKey(session.dataEncryptionKey, credentials);
+                if (!encryptionKey) {
+                    logger.debug(`Failed to decrypt dataEncryptionKey for session ${session.id}`);
+                } else {
+                    logger.debug(`Successfully decrypted dataEncryptionKey`);
+                }
+            } else if (credentials.encryption.type === 'dataKey') {
+                logger.debug(`Using machineKey directly for CLI session`);
+                // CLI session - use machineKey directly
+                encryptionKey = credentials.encryption.machineKey;
+            } else {
+                logger.debug(`Using legacy secret key`);
+                // Legacy session
+                encryptionKey = credentials.encryption.secret;
+                encryptionVariant = 'legacy';
+            }
+
+            logger.debug(`Encryption key available: ${!!encryptionKey}`);
+            logger.debug(`Encryption variant: ${encryptionVariant}`);
+
+            // Decrypt metadata if present and we have a key
+            if (session.metadata && encryptionKey) {
+                logger.debug(`Attempting to decrypt metadata...`);
                 try {
-                    const key = credentials.encryption.type === 'legacy'
-                        ? credentials.encryption.secret
-                        : credentials.encryption.machineKey;
+                    const metadataBytes = decodeBase64(session.metadata);
+                    logger.debug(`Metadata bytes length: ${metadataBytes.length}`);
                     const decrypted = decrypt(
-                        key,
-                        credentials.encryption.type,
-                        decodeBase64(session.metadata)
+                        encryptionKey,
+                        encryptionVariant,
+                        metadataBytes
                     );
                     if (decrypted) {
+                        logger.debug(`Successfully decrypted metadata:`, JSON.stringify(decrypted));
                         metadata = decrypted;
+                    } else {
+                        logger.debug(`Decrypt returned null`);
                     }
                 } catch (error) {
                     logger.debug(`Failed to decrypt metadata for session ${session.id}:`, error);
                 }
+            } else {
+                if (!session.metadata) {
+                    logger.debug(`No metadata to decrypt`);
+                }
+                if (!encryptionKey) {
+                    logger.debug(`No encryption key available`);
+                }
             }
 
-            // Decrypt agent state if present
-            if (session.agentState) {
+            // Decrypt agent state if present and we have a key
+            if (session.agentState && encryptionKey) {
                 try {
-                    const key = credentials.encryption.type === 'legacy'
-                        ? credentials.encryption.secret
-                        : credentials.encryption.machineKey;
                     const decrypted = decrypt(
-                        key,
-                        credentials.encryption.type,
+                        encryptionKey,
+                        encryptionVariant,
                         decodeBase64(session.agentState)
                     );
                     if (decrypted) {

@@ -59,23 +59,59 @@ export function libsodiumPublicKeyFromSecretKey(seed: Uint8Array): Uint8Array {
   return new Uint8Array(tweetnacl.box.keyPair.fromSecretKey(secretKey).publicKey);
 }
 
+/**
+ * Derive a Box public key from a seed using libsodium's crypto_box_seed_keypair approach
+ * This matches how the web client derives keypairs from contentDataKey seeds
+ */
+export function derivePublicKeyFromSeed(seed: Uint8Array): Uint8Array {
+  // libsodium's crypto_box_seed_keypair approach: hash the seed with SHA-512, use first 32 bytes as secret key
+  const hash = createHash('sha512').update(seed).digest();
+  const secretKey = new Uint8Array(hash.slice(0, 32));
+
+  // Derive the keypair from the secret key
+  const keypair = tweetnacl.box.keyPair.fromSecretKey(secretKey);
+  return keypair.publicKey;
+}
+
 export function libsodiumEncryptForPublicKey(data: Uint8Array, recipientPublicKey: Uint8Array): Uint8Array {
   // Generate ephemeral keypair for this encryption
   const ephemeralKeyPair = tweetnacl.box.keyPair();
-  
+
   // Generate random nonce (24 bytes for box encryption)
   const nonce = getRandomBytes(tweetnacl.box.nonceLength);
-  
+
   // Encrypt the data using box (authenticated encryption)
   const encrypted = tweetnacl.box(data, nonce, recipientPublicKey, ephemeralKeyPair.secretKey);
-  
+
   // Bundle format: ephemeral public key (32 bytes) + nonce (24 bytes) + encrypted data
   const result = new Uint8Array(ephemeralKeyPair.publicKey.length + nonce.length + encrypted.length);
   result.set(ephemeralKeyPair.publicKey, 0);
   result.set(nonce, ephemeralKeyPair.publicKey.length);
   result.set(encrypted, ephemeralKeyPair.publicKey.length + nonce.length);
-  
+
   return result;
+}
+
+/**
+ * Decrypt data that was encrypted for a public key (asymmetric decryption)
+ * @param encryptedBundle - Bundle containing ephemeral public key + nonce + encrypted data
+ * @param recipientSecretKey - The recipient's secret key
+ * @returns The decrypted data or null if decryption fails
+ */
+export function libsodiumDecryptFromPublicKey(encryptedBundle: Uint8Array, recipientSecretKey: Uint8Array): Uint8Array | null {
+  // Bundle format: ephemeral public key (32 bytes) + nonce (24 bytes) + encrypted data
+  if (encryptedBundle.length < 32 + 24) {
+    return null;
+  }
+
+  const ephemeralPublicKey = encryptedBundle.slice(0, 32);
+  const nonce = encryptedBundle.slice(32, 56);
+  const encrypted = encryptedBundle.slice(56);
+
+  // Decrypt using box.open (authenticated decryption)
+  const decrypted = tweetnacl.box.open(encrypted, nonce, ephemeralPublicKey, recipientSecretKey);
+
+  return decrypted || null;
 }
 
 /**

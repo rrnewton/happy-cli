@@ -3,7 +3,7 @@ import { logger } from '@/ui/logger'
 import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
-import { decodeBase64, encodeBase64, encrypt, decrypt, libsodiumEncryptForPublicKey } from './encryption';
+import { decodeBase64, encodeBase64, encrypt, decrypt, libsodiumEncryptForPublicKey, derivePublicKeyFromSeed } from './encryption';
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
@@ -42,8 +42,12 @@ export class ApiClient {
       encryptionKey = this.credential.encryption.machineKey;
       encryptionVariant = 'dataKey';
 
-      // Encrypt machineKey for the user's publicKey so web client can decrypt it
-      let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, this.credential.encryption.publicKey);
+      // IMPORTANT: The publicKey field actually contains the contentDataKey SEED, not a public key!
+      // We need to derive the actual Curve25519 public key from this seed before encrypting
+      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.publicKey);
+
+      // Encrypt machineKey for the derived public key so web client can decrypt it
+      let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, derivedPublicKey);
       dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
       dataEncryptionKey.set([0], 0); // Version byte
       dataEncryptionKey.set(encryptedDataKey, 1); // Encrypted machineKey
@@ -110,8 +114,12 @@ export class ApiClient {
       encryptionVariant = 'dataKey';
       encryptionKey = this.credential.encryption.machineKey;
 
-      // Encrypt machineKey for the user's publicKey so web client can decrypt it
-      let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, this.credential.encryption.publicKey);
+      // IMPORTANT: The publicKey field actually contains the contentDataKey SEED, not a public key!
+      // We need to derive the actual Curve25519 public key from this seed before encrypting
+      const derivedPublicKey = derivePublicKeyFromSeed(this.credential.encryption.publicKey);
+
+      // Encrypt machineKey for the derived public key so web client can decrypt it
+      let encryptedDataKey = libsodiumEncryptForPublicKey(this.credential.encryption.machineKey, derivedPublicKey);
       dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
       dataEncryptionKey.set([0], 0); // Version byte
       dataEncryptionKey.set(encryptedDataKey, 1); // Encrypted machineKey
