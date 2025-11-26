@@ -2,6 +2,7 @@
  * List active sessions command
  *
  * Fetches active sessions from the server and displays them in a user-friendly format.
+ * Supports filtering by session ID or title, and showing recent messages.
  */
 
 import { configuration } from '@/configuration';
@@ -14,6 +15,12 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 import tweetnacl from 'tweetnacl';
+
+export interface ListOptions {
+    sessionId?: string;      // -s, --session: filter by session ID (prefix match)
+    titleFilter?: string;    // -t, --title: filter by title substring (case-insensitive)
+    recentMsgs?: number;     // --recent-msgs N: show N recent messages
+}
 
 interface SessionResponse {
     id: string;
@@ -41,6 +48,22 @@ interface Metadata {
 
 interface AgentState {
     thinking?: boolean;
+    [key: string]: any;
+}
+
+interface MessageResponse {
+    id: string;
+    seq: number;
+    content: string;  // Base64 encrypted
+    localId: string | null;
+    createdAt: number;
+    updatedAt: number;
+}
+
+interface DecryptedMessage {
+    role?: 'user' | 'assistant';
+    type?: string;
+    content?: any;
     [key: string]: any;
 }
 
@@ -135,9 +158,97 @@ function getCurrentWorkingDirectory(claudeSessionId: string, spawnDirectory: str
 }
 
 /**
+ * Fetch messages for a session
+ */
+async function fetchSessionMessages(
+    sessionId: string,
+    credentials: Credentials,
+    encryptionKey: Uint8Array,
+    encryptionVariant: 'legacy' | 'dataKey',
+    limit: number
+): Promise<DecryptedMessage[]> {
+    const serverUrl = configuration.serverUrl;
+
+    try {
+        const response = await axios.get<{ messages: MessageResponse[] }>(
+            `${serverUrl}/v1/sessions/${sessionId}/messages`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${credentials.token}`
+                }
+            }
+        );
+
+        const messages = response.data.messages;
+        const decryptedMessages: DecryptedMessage[] = [];
+
+        // Messages come in desc order (newest first), take only what we need
+        const messagesToProcess = messages.slice(0, limit);
+
+        for (const msg of messagesToProcess) {
+            try {
+                const decrypted = decrypt(
+                    encryptionKey,
+                    encryptionVariant,
+                    decodeBase64(msg.content)
+                );
+                if (decrypted) {
+                    decryptedMessages.push(decrypted);
+                }
+            } catch (error) {
+                logger.debug(`Failed to decrypt message ${msg.id}:`, error);
+            }
+        }
+
+        // Reverse to get chronological order (oldest first)
+        return decryptedMessages.reverse();
+    } catch (error) {
+        logger.debug(`Failed to fetch messages for session ${sessionId}:`, error);
+        return [];
+    }
+}
+
+/**
+ * Format a message for display
+ */
+function formatMessage(msg: DecryptedMessage, indent: string = ''): string {
+    const role = msg.role || 'unknown';
+    const prefix = role === 'user' ? '👤 User' : role === 'assistant' ? '🤖 Assistant' : `[${role}]`;
+
+    // Handle different message content types
+    let content = '';
+    if (typeof msg.content === 'string') {
+        content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+        // Claude-style content array
+        content = msg.content
+            .filter((c: any) => c.type === 'text')
+            .map((c: any) => c.text)
+            .join('\n');
+    } else if (msg.content?.text) {
+        content = msg.content.text;
+    } else if (msg.type === 'text' && msg.text) {
+        content = msg.text;
+    } else {
+        content = JSON.stringify(msg.content || msg, null, 2);
+    }
+
+    // Truncate long messages
+    const maxLen = 200;
+    if (content.length > maxLen) {
+        content = content.substring(0, maxLen) + '...';
+    }
+
+    // Replace newlines with indented newlines
+    content = content.replace(/\n/g, `\n${indent}         `);
+
+    return `${indent}${prefix}: ${content}`;
+}
+
+/**
  * List all active sessions
  */
-export async function listSessions(credentials: Credentials): Promise<void> {
+export async function listSessions(credentials: Credentials, options: ListOptions = {}): Promise<void> {
     try {
         const serverUrl = configuration.serverUrl;
 
@@ -155,9 +266,21 @@ export async function listSessions(credentials: Credentials): Promise<void> {
             return;
         }
 
-        console.log(`\nActive Sessions (${sessions.length}):\n`);
+        // Process sessions to extract metadata and title for filtering
+        interface ProcessedSession {
+            session: SessionResponse;
+            metadata: Metadata;
+            agentState: AgentState;
+            encryptionKey: Uint8Array | null;
+            encryptionVariant: 'legacy' | 'dataKey';
+            title: string;
+            host: string;
+            workingDir: string;
+            thinking: boolean;
+        }
 
-        // Display each session
+        const processedSessions: ProcessedSession[] = [];
+
         for (const session of sessions) {
             logger.debug(`\n=== Processing session ${session.id} ===`);
             logger.debug(`Has dataEncryptionKey: ${!!session.dataEncryptionKey}`);
@@ -167,13 +290,11 @@ export async function listSessions(credentials: Credentials): Promise<void> {
             let agentState: AgentState = {};
 
             // Determine the encryption key to use
-            // Priority: dataEncryptionKey (web/mobile sessions) > machineKey (CLI sessions) > secret (legacy)
             let encryptionKey: Uint8Array | null = null;
             let encryptionVariant: 'legacy' | 'dataKey' = 'dataKey';
 
             if (session.dataEncryptionKey) {
                 logger.debug(`Session has dataEncryptionKey, attempting to decrypt...`);
-                // Web/mobile session - decrypt the dataEncryptionKey first
                 encryptionKey = decryptDataEncryptionKey(session.dataEncryptionKey, credentials);
                 if (!encryptionKey) {
                     logger.debug(`Failed to decrypt dataEncryptionKey for session ${session.id}`);
@@ -182,55 +303,32 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                 }
             } else if (credentials.encryption.type === 'dataKey') {
                 logger.debug(`Using machineKey directly for CLI session`);
-                // CLI session - use machineKey directly
                 encryptionKey = credentials.encryption.machineKey;
             } else {
                 logger.debug(`Using legacy secret key`);
-                // Legacy session
                 encryptionKey = credentials.encryption.secret;
                 encryptionVariant = 'legacy';
             }
-
-            logger.debug(`Encryption key available: ${!!encryptionKey}`);
-            logger.debug(`Encryption variant: ${encryptionVariant}`);
 
             // Decrypt metadata if present and we have a key
             if (session.metadata && encryptionKey) {
                 logger.debug(`Attempting to decrypt metadata...`);
                 try {
                     const metadataBytes = decodeBase64(session.metadata);
-                    logger.debug(`Metadata bytes length: ${metadataBytes.length}`);
-                    const decrypted = decrypt(
-                        encryptionKey,
-                        encryptionVariant,
-                        metadataBytes
-                    );
+                    const decrypted = decrypt(encryptionKey, encryptionVariant, metadataBytes);
                     if (decrypted) {
                         logger.debug(`Successfully decrypted metadata:`, JSON.stringify(decrypted));
                         metadata = decrypted;
-                    } else {
-                        logger.debug(`Decrypt returned null`);
                     }
                 } catch (error) {
                     logger.debug(`Failed to decrypt metadata for session ${session.id}:`, error);
-                }
-            } else {
-                if (!session.metadata) {
-                    logger.debug(`No metadata to decrypt`);
-                }
-                if (!encryptionKey) {
-                    logger.debug(`No encryption key available`);
                 }
             }
 
             // Decrypt agent state if present and we have a key
             if (session.agentState && encryptionKey) {
                 try {
-                    const decrypted = decrypt(
-                        encryptionKey,
-                        encryptionVariant,
-                        decodeBase64(session.agentState)
-                    );
+                    const decrypted = decrypt(encryptionKey, encryptionVariant, decodeBase64(session.agentState));
                     if (decrypted) {
                         agentState = decrypted;
                     }
@@ -239,8 +337,7 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                 }
             }
 
-            // Format and display session info
-            // Title priority: summary.text > last path segment > (Untitled)
+            // Compute title
             let title = '(Untitled)';
             if (metadata.summary?.text) {
                 title = metadata.summary.text;
@@ -250,21 +347,99 @@ export async function listSessions(credentials: Credentials): Promise<void> {
                     title = segments[segments.length - 1];
                 }
             }
-            const host = metadata.host || '(Unknown)';
-            const thinking = agentState.thinking ? '🤔 Thinking' : '💤 Idle';
 
-            // Get current working directory - prefer live cwd from Claude session file
+            // Get working directory
             let workingDir = metadata.path || '(Unknown)';
             if (metadata.claudeSessionId && metadata.path) {
                 workingDir = getCurrentWorkingDirectory(metadata.claudeSessionId, metadata.path);
             }
 
-            console.log(`  ID: ${session.id}`);
-            console.log(`  Title: ${title}`);
-            console.log(`  Working Directory: ${workingDir}`);
-            console.log(`  Host: ${host}`);
-            console.log(`  Status: ${thinking}`);
-            console.log(`  Last Active: ${new Date(session.activeAt).toLocaleString()}`);
+            processedSessions.push({
+                session,
+                metadata,
+                agentState,
+                encryptionKey,
+                encryptionVariant,
+                title,
+                host: metadata.host || '(Unknown)',
+                workingDir,
+                thinking: !!agentState.thinking
+            });
+        }
+
+        // Apply filters
+        let filteredSessions = processedSessions;
+
+        // Filter by session ID (prefix match)
+        if (options.sessionId) {
+            const idFilter = options.sessionId.toLowerCase();
+            filteredSessions = filteredSessions.filter(s =>
+                s.session.id.toLowerCase().startsWith(idFilter)
+            );
+        }
+
+        // Filter by title (case-insensitive substring match)
+        if (options.titleFilter) {
+            const titleFilter = options.titleFilter.toLowerCase();
+            filteredSessions = filteredSessions.filter(s =>
+                s.title.toLowerCase().includes(titleFilter)
+            );
+        }
+
+        if (filteredSessions.length === 0) {
+            if (options.sessionId || options.titleFilter) {
+                console.log('No sessions match the specified filters.');
+            } else {
+                console.log('No active sessions found.');
+            }
+            return;
+        }
+
+        // Determine if we need separators (multiple sessions with messages)
+        const showMessages = options.recentMsgs && options.recentMsgs > 0;
+        const needsSeparators = showMessages && filteredSessions.length > 1;
+        const indent = needsSeparators ? '    ' : '';
+
+        console.log(`\nActive Sessions (${filteredSessions.length}):\n`);
+
+        // Display each session
+        for (let i = 0; i < filteredSessions.length; i++) {
+            const { session, encryptionKey, encryptionVariant, title, host, workingDir, thinking } = filteredSessions[i];
+
+            // Print separator for multi-session output with messages
+            if (needsSeparators && i > 0) {
+                console.log('\n' + '═'.repeat(70) + '\n');
+            }
+
+            const thinkingStatus = thinking ? '🤔 Thinking' : '💤 Idle';
+
+            console.log(`${indent}ID: ${session.id}`);
+            console.log(`${indent}Title: ${title}`);
+            console.log(`${indent}Working Directory: ${workingDir}`);
+            console.log(`${indent}Host: ${host}`);
+            console.log(`${indent}Status: ${thinkingStatus}`);
+            console.log(`${indent}Last Active: ${new Date(session.activeAt).toLocaleString()}`);
+
+            // Fetch and display recent messages if requested
+            if (showMessages && encryptionKey) {
+                console.log(`${indent}Recent Messages:`);
+                const messages = await fetchSessionMessages(
+                    session.id,
+                    credentials,
+                    encryptionKey,
+                    encryptionVariant,
+                    options.recentMsgs!
+                );
+
+                if (messages.length === 0) {
+                    console.log(`${indent}    (no messages)`);
+                } else {
+                    for (const msg of messages) {
+                        console.log(formatMessage(msg, indent + '    '));
+                    }
+                }
+            }
+
             console.log('');
         }
     } catch (error) {

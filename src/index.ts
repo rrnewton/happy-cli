@@ -129,11 +129,49 @@ import { execFileSync } from 'node:child_process'
     }
     return;
   } else if (subcommand === 'list') {
-    // List active sessions
+    // List active sessions with optional filters
     try {
       const { credentials } = await authAndSetupMachineIfNeeded();
       const { listSessions } = await import('@/commands/list');
-      await listSessions(credentials);
+
+      // Parse list command options
+      let sessionId: string | undefined;
+      let titleFilter: string | undefined;
+      let recentMsgs: number | undefined;
+
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        if ((arg === '-s' || arg === '--session') && args[i + 1]) {
+          sessionId = args[++i];
+        } else if ((arg === '-t' || arg === '--title') && args[i + 1]) {
+          titleFilter = args[++i];
+        } else if (arg === '--recent-msgs' && args[i + 1]) {
+          const num = parseInt(args[++i], 10);
+          if (!isNaN(num) && num > 0) {
+            recentMsgs = num;
+          }
+        } else if (arg === '--help' || arg === '-h') {
+          console.log(`
+Usage: happy list [options]
+
+Options:
+  -s, --session <id>     Filter by session ID (prefix match)
+  -t, --title <text>     Filter by title (case-insensitive substring match)
+  --recent-msgs <n>      Show N recent messages for each session
+  -h, --help             Show this help message
+
+Examples:
+  happy list                          List all active sessions
+  happy list -s cmed5                 Show session with ID starting with "cmed5"
+  happy list -t "my project"          Show sessions with "my project" in title
+  happy list --recent-msgs 5          Show 5 recent messages for each session
+  happy list -s abc --recent-msgs 3   Show session abc with 3 recent messages
+`);
+          return;
+        }
+      }
+
+      await listSessions(credentials, { sessionId, titleFilter, recentMsgs });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {
