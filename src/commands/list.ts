@@ -66,11 +66,15 @@ function decryptDataEncryptionKey(encryptedKey: string, credentials: Credentials
         const bundleWithoutVersion = encryptedBundle.slice(1);
         logger.debug(`Bundle without version length: ${bundleWithoutVersion.length}`);
 
-        // The publicKey field is actually the contentDataKey seed from the web client
+        // The publicKey field is actually the contentDataKey seed from the web client (already Uint8Array)
         // Derive the keypair from this seed using libsodium's crypto_box_seed_keypair approach
-        const keypair = tweetnacl.box.keyPair.fromSecretKey(
-            new Uint8Array(createHash('sha512').update(credentials.encryption.publicKey).digest()).slice(0, 32)
-        );
+        const seedBytes = credentials.encryption.publicKey;
+        logger.debug(`Seed bytes from publicKey: ${seedBytes.length} bytes`);
+
+        // libsodium's crypto_box_seed_keypair: hash the seed with SHA-512, use first 32 bytes as secret key
+        const hash = createHash('sha512').update(Buffer.from(seedBytes)).digest();
+        const secretKey = new Uint8Array(hash.slice(0, 32));
+        const keypair = tweetnacl.box.keyPair.fromSecretKey(secretKey);
         logger.debug(`Derived keypair from publicKey seed`);
 
         // Decrypt using the derived secret key
