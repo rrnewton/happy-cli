@@ -382,8 +382,10 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
         unknownArgs.push(arg)
       } else if (arg === '--happy-starting-mode') {
         options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
-      } else if (arg === '--yolo') {
-        // Shortcut for --dangerously-skip-permissions
+      } else if (arg === '--yolo' || arg === '--dangerously-skip-permissions') {
+        // Set Happy's permission mode to bypass (no RPC permission requests)
+        options.permissionMode = 'bypassPermissions'
+        // Also pass through to Claude
         unknownArgs.push('--dangerously-skip-permissions')
       } else if (arg === '--started-by') {
         options.startedBy = args[++i] as 'daemon' | 'terminal'

@@ -312,7 +312,9 @@ export type Metadata = {
   lifecycleStateSince?: number,
   archivedBy?: string,
   archiveReason?: string,
-  flavor?: string
+  flavor?: string,
+  // Permission mode set by CLI flags (e.g., --yolo sets 'bypassPermissions')
+  permissionMode?: PermissionMode
 };
 
 export type AgentState = {

@@ -49,7 +49,8 @@ export async function loop(opts: LoopOptions) {
         logPath: logPath,
         messageQueue: opts.messageQueue,
         allowedTools: opts.allowedTools,
-        onModeChange: opts.onModeChange
+        onModeChange: opts.onModeChange,
+        initialPermissionMode: opts.permissionMode
     });
 
     // Notify that session is ready

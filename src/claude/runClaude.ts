@@ -86,7 +86,9 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // Initialize lifecycle state
         lifecycleState: 'running',
         lifecycleStateSince: Date.now(),
-        flavor: 'claude'
+        flavor: 'claude',
+        // Permission mode from CLI flags (e.g., --yolo sets 'bypassPermissions')
+        permissionMode: options.permissionMode
     };
     const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
     logger.debug(`Session created: ${response.id}`);
@@ -156,6 +158,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     }));
 
     // Forward messages to the queue
+    const cliPermissionMode = options.permissionMode; // CLI-specified mode (sticky)
     let currentPermissionMode = options.permissionMode;
     let currentModel = options.model; // Track current model state
     let currentFallbackModel: string | undefined = undefined; // Track current fallback model
@@ -166,14 +169,21 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     session.onUserMessage((message) => {
 
         // Resolve permission mode from meta
+        // CLI-specified mode is sticky - only override if message explicitly sets a non-default mode
+        // This prevents web client's default "default" mode from overriding --yolo/bypassPermissions
         let messagePermissionMode = currentPermissionMode;
         if (message.meta?.permissionMode) {
             const validModes: PermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions', 'plan'];
             if (validModes.includes(message.meta.permissionMode as PermissionMode)) {
-                messagePermissionMode = message.meta.permissionMode as PermissionMode;
-                currentPermissionMode = messagePermissionMode;
-                logger.debug(`[loop] Permission mode updated from user message to: ${currentPermissionMode}`);
-
+                const incomingMode = message.meta.permissionMode as PermissionMode;
+                // Only update if: incoming is not 'default', OR we didn't have a CLI-specified mode
+                if (incomingMode !== 'default' || !cliPermissionMode) {
+                    messagePermissionMode = incomingMode;
+                    currentPermissionMode = messagePermissionMode;
+                    logger.debug(`[loop] Permission mode updated from user message to: ${currentPermissionMode}`);
+                } else {
+                    logger.debug(`[loop] Ignoring default permission mode from message, keeping CLI mode: ${currentPermissionMode}`);
+                }
             } else {
                 logger.debug(`[loop] Invalid permission mode received: ${message.meta.permissionMode}`);
             }
