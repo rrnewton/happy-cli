@@ -191,9 +191,6 @@ Examples:
   } else if (subcommand === 'prompt') {
     // Send prompt to session
     try {
-      const { credentials } = await authAndSetupMachineIfNeeded();
-      const { promptSession } = await import('@/commands/prompt');
-
       // Parse arguments
       let sessionId: string | null = null;
       let promptText: string | null = null;
@@ -203,21 +200,41 @@ Examples:
           sessionId = args[++i];
         } else if (args[i] === '-p' || args[i] === '--prompt') {
           promptText = args[++i];
+        } else if (args[i] === '-h' || args[i] === '--help') {
+          console.log(`
+Usage: happy prompt [options]
+
+Send a prompt to an active session.
+
+Options:
+  -s, --session <id>     Session ID to send prompt to (required)
+  -p, --prompt <text>    Prompt text to send (required)
+  -h, --help             Show this help message
+
+Examples:
+  happy prompt -s cmed556s -p "Hello, what can you help me with?"
+  happy prompt --session abc123 --prompt "List files in current directory"
+`);
+          return;
         }
       }
 
       if (!sessionId) {
         console.error('Session ID required. Use -s or --session to specify session ID.');
         console.error('Example: happy prompt -s <session-id> -p "your prompt here"');
+        console.error('Run `happy prompt --help` for more information.');
         process.exit(1);
       }
 
       if (!promptText) {
         console.error('Prompt text required. Use -p or --prompt to specify prompt text.');
         console.error('Example: happy prompt -s <session-id> -p "your prompt here"');
+        console.error('Run `happy prompt --help` for more information.');
         process.exit(1);
       }
 
+      const { credentials } = await authAndSetupMachineIfNeeded();
+      const { promptSession } = await import('@/commands/prompt');
       await promptSession(credentials, sessionId, promptText);
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
