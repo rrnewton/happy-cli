@@ -138,6 +138,7 @@ import { execFileSync } from 'node:child_process'
       let sessionId: string | undefined;
       let titleFilter: string | undefined;
       let recentMsgs: number | undefined;
+      let msgLen: number | undefined;
 
       for (let i = 1; i < args.length; i++) {
         const arg = args[i];
@@ -150,6 +151,11 @@ import { execFileSync } from 'node:child_process'
           if (!isNaN(num) && num > 0) {
             recentMsgs = num;
           }
+        } else if (arg === '--msg-len' && args[i + 1]) {
+          const num = parseInt(args[++i], 10);
+          if (!isNaN(num)) {
+            msgLen = num;
+          }
         } else if (arg === '--help' || arg === '-h') {
           console.log(`
 Usage: happy list [options]
@@ -158,6 +164,7 @@ Options:
   -s, --session <id>     Filter by session ID (prefix match)
   -t, --title <text>     Filter by title (case-insensitive substring match)
   --recent-msgs <n>      Show N recent messages for each session
+  --msg-len <n>          Max length per message (default 200, -1 = unlimited)
   -h, --help             Show this help message
 
 Examples:
@@ -166,12 +173,13 @@ Examples:
   happy list -t "my project"          Show sessions with "my project" in title
   happy list --recent-msgs 5          Show 5 recent messages for each session
   happy list -s abc --recent-msgs 3   Show session abc with 3 recent messages
+  happy list --recent-msgs 2 --msg-len -1   Show full message content
 `);
           return;
         }
       }
 
-      await listSessions(credentials, { sessionId, titleFilter, recentMsgs });
+      await listSessions(credentials, { sessionId, titleFilter, recentMsgs, msgLen });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {

@@ -20,6 +20,7 @@ export interface ListOptions {
     sessionId?: string;      // -s, --session: filter by session ID (prefix match)
     titleFilter?: string;    // -t, --title: filter by title substring (case-insensitive)
     recentMsgs?: number;     // --recent-msgs N: show N recent messages
+    msgLen?: number;         // --msg-len N: max length per message (-1 = unlimited, default 200)
 }
 
 interface SessionResponse {
@@ -51,19 +52,25 @@ interface AgentState {
     [key: string]: any;
 }
 
+interface MessageContent {
+    c: string;  // Base64 encrypted content
+    t: 'encrypted';
+}
+
 interface MessageResponse {
     id: string;
     seq: number;
-    content: string;  // Base64 encrypted
+    content: MessageContent;
     localId: string | null;
     createdAt: number;
     updatedAt: number;
 }
 
 interface DecryptedMessage {
-    role?: 'user' | 'assistant';
+    role?: 'user' | 'assistant' | 'agent';
     type?: string;
     content?: any;
+    meta?: any;
     [key: string]: any;
 }
 
@@ -187,10 +194,12 @@ async function fetchSessionMessages(
 
         for (const msg of messagesToProcess) {
             try {
+                // Content is an object with {c: base64, t: 'encrypted'}
+                const encryptedContent = msg.content.c;
                 const decrypted = decrypt(
                     encryptionKey,
                     encryptionVariant,
-                    decodeBase64(msg.content)
+                    decodeBase64(encryptedContent)
                 );
                 if (decrypted) {
                     decryptedMessages.push(decrypted);
@@ -209,33 +218,74 @@ async function fetchSessionMessages(
 }
 
 /**
- * Format a message for display
+ * Check if a message should be displayed
+ * Filters out internal event messages and other non-user-facing content
  */
-function formatMessage(msg: DecryptedMessage, indent: string = ''): string {
-    const role = msg.role || 'unknown';
-    const prefix = role === 'user' ? '👤 User' : role === 'assistant' ? '🤖 Assistant' : `[${role}]`;
+function shouldDisplayMessage(msg: DecryptedMessage): boolean {
+    // Structure: msg.content is the actual message payload
+    const msgContent = msg.content;
 
-    // Handle different message content types
+    // Skip internal event messages (e.g., {type: 'event', data: {type: 'ready'}})
+    if (msgContent?.type === 'event') {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Format a message for display
+ *
+ * Message structure from decryption:
+ * - User: {role: 'user', content: {type: 'text', text: '...'}, meta: {...}}
+ * - Agent output: {role: 'agent', content: {type: 'output', data: {..., message: {content: [{type: 'text', text: '...'}]}}}, meta: {...}}
+ * - Agent event: {role: 'agent', content: {type: 'event', data: {...}}}
+ */
+function formatMessage(msg: DecryptedMessage, indent: string = '', maxLen: number = 200): string {
+    // Determine role and prefix from msg.role
+    const role = msg.role;
+    let prefix: string;
+
+    if (role === 'user') {
+        prefix = '👤 User';
+    } else if (role === 'agent' || role === 'assistant') {
+        prefix = '🤖 Assistant';
+    } else {
+        prefix = `[${role || 'unknown'}]`;
+    }
+
+    // Extract display content based on message structure
     let content = '';
-    if (typeof msg.content === 'string') {
-        content = msg.content;
-    } else if (Array.isArray(msg.content)) {
+    const msgContent = msg.content;
+
+    if (typeof msgContent === 'string') {
+        content = msgContent;
+    } else if (msgContent?.type === 'text' && msgContent?.text) {
+        // User message: {type: 'text', text: '...'}
+        content = msgContent.text;
+    } else if (msgContent?.type === 'output' && msgContent?.data?.message?.content) {
+        // Agent output: extract text from message.content array
+        const messageContent = msgContent.data.message.content;
+        if (Array.isArray(messageContent)) {
+            content = messageContent
+                .filter((c: any) => c.type === 'text')
+                .map((c: any) => c.text)
+                .join('\n');
+        } else if (typeof messageContent === 'string') {
+            content = messageContent;
+        }
+    } else if (Array.isArray(msgContent)) {
         // Claude-style content array
-        content = msg.content
+        content = msgContent
             .filter((c: any) => c.type === 'text')
             .map((c: any) => c.text)
             .join('\n');
-    } else if (msg.content?.text) {
-        content = msg.content.text;
-    } else if (msg.type === 'text' && msg.text) {
-        content = msg.text;
     } else {
-        content = JSON.stringify(msg.content || msg, null, 2);
+        content = JSON.stringify(msgContent || msg, null, 2);
     }
 
-    // Truncate long messages
-    const maxLen = 200;
-    if (content.length > maxLen) {
+    // Truncate long messages (maxLen < 0 means unlimited)
+    if (maxLen >= 0 && content.length > maxLen) {
         content = content.substring(0, maxLen) + '...';
     }
 
@@ -431,11 +481,13 @@ export async function listSessions(credentials: Credentials, options: ListOption
                     options.recentMsgs!
                 );
 
-                if (messages.length === 0) {
+                const displayableMessages = messages.filter(shouldDisplayMessage);
+                const msgLen = options.msgLen ?? 200;
+                if (displayableMessages.length === 0) {
                     console.log(`${indent}    (no messages)`);
                 } else {
-                    for (const msg of messages) {
-                        console.log(formatMessage(msg, indent + '    '));
+                    for (const msg of displayableMessages) {
+                        console.log(formatMessage(msg, indent + '    ', msgLen));
                     }
                 }
             }
