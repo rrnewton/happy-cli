@@ -20,7 +20,6 @@ const CO_AUTHORED_CREDITS = (() => trimIdent(`
     via [Happy](https://happy.engineering)
 
     Co-Authored-By: Claude <noreply@anthropic.com>
-    Co-Authored-By: Happy <yesreply@happy.engineering>
 `))();
 
 /**
