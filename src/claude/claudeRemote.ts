@@ -1,5 +1,5 @@
 import { EnhancedMode, PermissionMode } from "./loop";
-import { query, type QueryOptions as Options, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
+import { query, type QueryOptions as Options, type SDKMessage, type SDKSystemMessage, type SDKAssistantMessage, type SDKResultMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { join, resolve } from 'node:path';
 import { projectPath } from "@/projectPath";
@@ -103,6 +103,71 @@ export async function claudeRemote(opts: {
         if (opts.onCompletionEvent) {
             opts.onCompletionEvent('Compaction started');
         }
+    }
+
+    // Handle /happy-status command - generates synthetic messages without calling Claude
+    if (specialCommand.type === 'happy-status') {
+        logger.debug('[claudeRemote] /happy-status command detected - generating test messages without Claude');
+
+        // Generate a test session ID if not resuming
+        const testSessionId = startFrom || `test-session-${Date.now()}`;
+        opts.onSessionFound(testSessionId);
+
+        // Create synthetic messages that mimic real Claude SDK output
+        const echoMessage = specialCommand.echoMessage || 'Happy CLI status check';
+        const timestamp = new Date().toISOString();
+
+        // Send user message (echo of what was sent)
+        opts.onMessage({
+            type: 'user',
+            message: {
+                role: 'user',
+                content: initial.message
+            }
+        } as SDKUserMessage);
+
+        // Send system init message
+        opts.onMessage({
+            type: 'system',
+            subtype: 'init',
+            session_id: testSessionId,
+            cwd: opts.path,
+            model: 'happy-status-test',
+            tools: []
+        } as SDKSystemMessage);
+
+        // Send assistant response
+        const responseText = `Happy Status Check - ${timestamp}\n\n` +
+            `✓ CLI is running\n` +
+            `✓ Server connection established\n` +
+            `✓ Session ID: ${testSessionId}\n` +
+            `✓ Working directory: ${opts.path}\n` +
+            (echoMessage !== 'Happy CLI status check' ? `\nEcho message: ${echoMessage}` : '');
+
+        opts.onMessage({
+            type: 'assistant',
+            message: {
+                role: 'assistant',
+                content: [{
+                    type: 'text',
+                    text: responseText
+                }]
+            }
+        } as SDKAssistantMessage);
+
+        // Send result message to indicate completion
+        opts.onMessage({
+            type: 'result',
+            subtype: 'success',
+            session_id: testSessionId
+        } as SDKResultMessage);
+
+        if (opts.onCompletionEvent) {
+            opts.onCompletionEvent('Status check completed');
+        }
+        opts.onReady();
+
+        return;
     }
 
     // Prepare SDK options

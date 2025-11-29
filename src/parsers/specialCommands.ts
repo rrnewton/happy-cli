@@ -11,9 +11,15 @@ export interface ClearCommandResult {
     isClear: boolean;
 }
 
+export interface HappyStatusCommandResult {
+    isHappyStatus: boolean;
+    echoMessage?: string;
+}
+
 export interface SpecialCommandResult {
-    type: 'compact' | 'clear' | null;
+    type: 'compact' | 'clear' | 'happy-status' | null;
     originalMessage?: string;
+    echoMessage?: string;
 }
 
 /**
@@ -49,9 +55,35 @@ export function parseCompact(message: string): CompactCommandResult {
  */
 export function parseClear(message: string): ClearCommandResult {
     const trimmed = message.trim();
-    
+
     return {
         isClear: trimmed === '/clear'
+    };
+}
+
+/**
+ * Parse /happy-status command
+ * Used for testing the message flow without calling Claude/Anthropic API
+ * Format: "/happy-status" or "/happy-status some echo message"
+ */
+export function parseHappyStatus(message: string): HappyStatusCommandResult {
+    const trimmed = message.trim();
+
+    if (trimmed === '/happy-status') {
+        return {
+            isHappyStatus: true
+        };
+    }
+
+    if (trimmed.startsWith('/happy-status ')) {
+        return {
+            isHappyStatus: true,
+            echoMessage: trimmed.substring('/happy-status '.length).trim()
+        };
+    }
+
+    return {
+        isHappyStatus: false
     };
 }
 
@@ -67,14 +99,22 @@ export function parseSpecialCommand(message: string): SpecialCommandResult {
             originalMessage: compactResult.originalMessage
         };
     }
-    
+
     const clearResult = parseClear(message);
     if (clearResult.isClear) {
         return {
             type: 'clear'
         };
     }
-    
+
+    const happyStatusResult = parseHappyStatus(message);
+    if (happyStatusResult.isHappyStatus) {
+        return {
+            type: 'happy-status',
+            echoMessage: happyStatusResult.echoMessage
+        };
+    }
+
     return {
         type: null
     };
