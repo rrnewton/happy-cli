@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { readCredentials, clearCredentials, clearMachineId, readSettings } from '@/persistence';
+import { readCredentials, clearCredentials, clearMachineId, readSettings, Credentials, writeCredentialsLegacy, updateSettings } from '@/persistence';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { configuration } from '@/configuration';
 import { existsSync, rmSync } from 'node:fs';
@@ -7,6 +7,11 @@ import { createInterface } from 'node:readline';
 import { stopDaemon, checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient';
 import { logger } from '@/ui/logger';
 import os from 'node:os';
+import { deriveKey } from '@/utils/deriveKey';
+import { encodeHex } from '@/utils/hex';
+import { parseBackupKey } from '@/utils/backupKey';
+import { authGetToken } from '@/api/auth';
+import { randomUUID } from 'node:crypto';
 
 export async function handleAuthCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
@@ -29,6 +34,9 @@ export async function handleAuthCommand(args: string[]): Promise<void> {
     case 'status':
       await handleAuthStatus();
       break;
+    case 'account':
+      await handleAuthAccount();
+      break;
     default:
       console.error(chalk.red(`Unknown auth subcommand: ${subcommand}`));
       showAuthHelp();
@@ -41,19 +49,27 @@ function showAuthHelp(): void {
 ${chalk.bold('happy auth')} - Authentication management
 
 ${chalk.bold('Usage:')}
-  happy auth login [--force]    Authenticate with Happy
-  happy auth logout             Remove authentication and machine data  
+  happy auth login [options]    Authenticate with Happy
+  happy auth logout             Remove authentication and machine data
   happy auth status             Show authentication status
-  happy auth show-backup        Display backup key for mobile/web clients
+  happy auth account            Show account IDs (matches webapp Account page)
   happy auth help               Show this help message
 
-${chalk.bold('Options:')}
-  --force    Clear credentials, machine ID, and stop daemon before re-auth
+${chalk.bold('Login Options:')}
+  --backup-key <KEY>   Login using backup key from webapp (XXXXX-XXXXX-...)
+  --force              Clear credentials, machine ID, and stop daemon before re-auth
+
+${chalk.bold('Examples:')}
+  happy auth login --backup-key "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY-Z2345-67ABC-DEFGH-IJKLM-NOPQR-S"
 `);
 }
 
 async function handleAuthLogin(args: string[]): Promise<void> {
   const forceAuth = args.includes('--force') || args.includes('-f');
+
+  // Parse --backup-key argument
+  const backupKeyIndex = args.findIndex(arg => arg === '--backup-key' || arg === '-k');
+  const backupKey = backupKeyIndex !== -1 ? args[backupKeyIndex + 1] : null;
 
   if (forceAuth) {
     // As per user's request: "--force-auth will clear credentials, clear machine ID, stop daemon"
@@ -84,6 +100,12 @@ async function handleAuthLogin(args: string[]): Promise<void> {
     console.log('');
   }
 
+  // Handle backup key login
+  if (backupKey) {
+    await handleBackupKeyLogin(backupKey);
+    return;
+  }
+
   // Check if already authenticated (if not forcing)
   if (!forceAuth) {
     const existingCreds = await readCredentials();
@@ -108,6 +130,44 @@ async function handleAuthLogin(args: string[]): Promise<void> {
     const result = await authAndSetupMachineIfNeeded();
     console.log(chalk.green('\n✓ Authentication successful'));
     console.log(chalk.gray(`  Machine ID: ${result.machineId}`));
+  } catch (error) {
+    console.error(chalk.red('Authentication failed:'), error instanceof Error ? error.message : 'Unknown error');
+    process.exit(1);
+  }
+}
+
+/**
+ * Handle login using a backup key from the webapp
+ * This allows logging into the same account on multiple CLI instances
+ */
+async function handleBackupKeyLogin(backupKey: string): Promise<void> {
+  console.log(chalk.blue('Logging in with backup key...\n'));
+
+  try {
+    // Parse the backup key to get the raw secret bytes
+    const secretBytes = parseBackupKey(backupKey);
+    console.log(chalk.gray('✓ Parsed backup key'));
+
+    // Authenticate with the server to get a token
+    console.log(chalk.gray('  Authenticating with server...'));
+    const token = await authGetToken(secretBytes);
+    console.log(chalk.gray('✓ Received authentication token'));
+
+    // Save credentials (using legacy format since we have the master secret)
+    await writeCredentialsLegacy({ secret: secretBytes, token });
+    console.log(chalk.gray('✓ Saved credentials'));
+
+    // Generate a machine ID
+    const settings = await updateSettings(async s => ({
+      ...s,
+      machineId: randomUUID()
+    }));
+    console.log(chalk.gray('✓ Generated machine ID'));
+
+    console.log(chalk.green('\n✓ Authentication successful'));
+    console.log(chalk.gray(`  Machine ID: ${settings.machineId}`));
+    console.log(chalk.gray(`  Host: ${os.hostname()}`));
+    console.log(chalk.gray(`  Server: ${configuration.serverUrl}`));
   } catch (error) {
     console.error(chalk.red('Authentication failed:'), error instanceof Error ? error.message : 'Unknown error');
     process.exit(1);
@@ -240,5 +300,63 @@ async function handleAuthStatus(): Promise<void> {
     }
   } catch {
     console.log(chalk.gray('✗ Daemon not running'));
+  }
+}
+
+/**
+ * Parse the user ID (sub claim) from a JWT token
+ */
+function parseTokenSub(token: string): string {
+  const [, payload] = token.split('.');
+  const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  if (typeof decoded.sub !== 'string') {
+    throw new Error('Invalid token: missing sub claim');
+  }
+  return decoded.sub;
+}
+
+/**
+ * Get the master secret from credentials for deriving anonymous ID
+ */
+function getMasterSecret(credentials: Credentials): Uint8Array {
+  if (credentials.encryption.type === 'legacy') {
+    return credentials.encryption.secret;
+  } else {
+    return credentials.encryption.dataKeySeed;
+  }
+}
+
+/**
+ * Show account IDs that match the webapp's Account page
+ * This helps verify CLI and webapp are using the same account
+ */
+async function handleAuthAccount(): Promise<void> {
+  const credentials = await readCredentials();
+
+  if (!credentials) {
+    console.log(chalk.red('✗ Not authenticated'));
+    console.log(chalk.gray('  Run "happy auth login" to authenticate'));
+    return;
+  }
+
+  console.log(chalk.bold('\nAccount Information\n'));
+
+  // Public ID (server ID) - from JWT token's sub claim
+  const publicId = parseTokenSub(credentials.token);
+  console.log(`${chalk.cyan('Public ID:')}    ${publicId}`);
+
+  // Anonymous ID - only available for legacy credentials
+  // For dataKey credentials, the CLI receives contentDataKey (a public key),
+  // not the original masterSecret, so we cannot derive the matching anonymous ID
+  if (credentials.encryption.type === 'legacy') {
+    const masterSecret = credentials.encryption.secret;
+    const analyticsKey = await deriveKey(masterSecret, 'Happy Coder', ['analytics', 'id']);
+    const anonId = encodeHex(analyticsKey).slice(0, 16).toLowerCase();
+    console.log(`${chalk.cyan('Anonymous ID:')} ${anonId}`);
+    console.log(chalk.gray('\nThese IDs should match what you see in the webapp under Settings > Account'));
+  } else {
+    console.log(`${chalk.cyan('Anonymous ID:')} ${chalk.yellow('N/A (V2 credentials)')}`);
+    console.log(chalk.gray('\nNote: Anonymous ID is only available with legacy credentials.'));
+    console.log(chalk.gray('The Public ID should match what you see in the webapp under Settings > Account.'));
   }
 }
