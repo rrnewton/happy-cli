@@ -12,6 +12,7 @@ import { encodeHex } from '@/utils/hex';
 import { parseBackupKey } from '@/utils/backupKey';
 import { authGetToken } from '@/api/auth';
 import { randomUUID } from 'node:crypto';
+import axios from 'axios';
 
 export async function handleAuthCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
@@ -35,7 +36,9 @@ export async function handleAuthCommand(args: string[]): Promise<void> {
       await handleAuthStatus();
       break;
     case 'account':
-      await handleAuthAccount();
+      // Deprecated: merged into 'status'
+      console.log(chalk.yellow('Note: "auth account" is now part of "auth status"'));
+      await handleAuthStatus();
       break;
     default:
       console.error(chalk.red(`Unknown auth subcommand: ${subcommand}`));
@@ -51,8 +54,7 @@ ${chalk.bold('happy auth')} - Authentication management
 ${chalk.bold('Usage:')}
   happy auth login [options]    Authenticate with Happy
   happy auth logout             Remove authentication and machine data
-  happy auth status             Show authentication status
-  happy auth account            Show account IDs (matches webapp Account page)
+  happy auth status             Show authentication and account status
   happy auth help               Show this help message
 
 ${chalk.bold('Login Options:')}
@@ -259,11 +261,51 @@ async function handleAuthLogout(): Promise<void> {
 //   console.log(chalk.yellow('⚠️  Keep this key secure - it provides full access to your account'));
 // }
 
+/**
+ * Parse the user ID (sub claim) from a JWT token
+ */
+function parseTokenSub(token: string): string {
+  const [, payload] = token.split('.');
+  const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  if (typeof decoded.sub !== 'string') {
+    throw new Error('Invalid token: missing sub claim');
+  }
+  return decoded.sub;
+}
+
+/**
+ * Fetch account profile from the server
+ */
+async function fetchAccountProfile(token: string): Promise<{ username: string | null; firstName: string | null; lastName: string | null } | null> {
+  try {
+    const response = await axios.get(`${configuration.serverUrl}/v1/account/profile`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+    return {
+      username: response.data.username,
+      firstName: response.data.firstName,
+      lastName: response.data.lastName
+    };
+  } catch (error) {
+    logger.debug('Failed to fetch account profile:', error);
+    return null;
+  }
+}
+
 async function handleAuthStatus(): Promise<void> {
   const credentials = await readCredentials();
   const settings = await readSettings();
 
   console.log(chalk.bold('\nAuthentication Status\n'));
+
+  // Show happy home directory
+  console.log(chalk.gray(`  Happy home: ${configuration.happyHomeDir}`));
+  console.log(chalk.gray(`  Server: ${configuration.serverUrl}`));
+  console.log('');
 
   if (!credentials) {
     console.log(chalk.red('✗ Not authenticated'));
@@ -273,9 +315,29 @@ async function handleAuthStatus(): Promise<void> {
 
   console.log(chalk.green('✓ Authenticated'));
 
-  // Token preview (first few chars for security)
-  const tokenPreview = credentials.token.substring(0, 30) + '...';
-  console.log(chalk.gray(`  Token: ${tokenPreview}`));
+  // Fetch and display account info
+  const profile = await fetchAccountProfile(credentials.token);
+  if (profile) {
+    if (profile.username) {
+      console.log(chalk.gray(`  Username: ${profile.username}`));
+    }
+    const displayName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+    if (displayName) {
+      console.log(chalk.gray(`  Name: ${displayName}`));
+    }
+  }
+
+  // Public ID from JWT
+  const publicId = parseTokenSub(credentials.token);
+  console.log(chalk.gray(`  Public ID: ${publicId}`));
+
+  // Anonymous ID - only for legacy credentials
+  if (credentials.encryption.type === 'legacy') {
+    const masterSecret = credentials.encryption.secret;
+    const analyticsKey = await deriveKey(masterSecret, 'Happy Coder', ['analytics', 'id']);
+    const anonId = encodeHex(analyticsKey).slice(0, 16).toLowerCase();
+    console.log(chalk.gray(`  Anonymous ID: ${anonId}`));
+  }
 
   // Machine status
   if (settings?.machineId) {
@@ -286,9 +348,6 @@ async function handleAuthStatus(): Promise<void> {
     console.log(chalk.yellow('⚠️  Machine not registered'));
     console.log(chalk.gray('  Run "happy auth login --force" to fix this'));
   }
-
-  // Data location
-  console.log(chalk.gray(`\n  Data directory: ${configuration.happyHomeDir}`));
 
   // Daemon status
   try {
@@ -303,60 +362,3 @@ async function handleAuthStatus(): Promise<void> {
   }
 }
 
-/**
- * Parse the user ID (sub claim) from a JWT token
- */
-function parseTokenSub(token: string): string {
-  const [, payload] = token.split('.');
-  const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  if (typeof decoded.sub !== 'string') {
-    throw new Error('Invalid token: missing sub claim');
-  }
-  return decoded.sub;
-}
-
-/**
- * Get the master secret from credentials for deriving anonymous ID
- */
-function getMasterSecret(credentials: Credentials): Uint8Array {
-  if (credentials.encryption.type === 'legacy') {
-    return credentials.encryption.secret;
-  } else {
-    return credentials.encryption.dataKeySeed;
-  }
-}
-
-/**
- * Show account IDs that match the webapp's Account page
- * This helps verify CLI and webapp are using the same account
- */
-async function handleAuthAccount(): Promise<void> {
-  const credentials = await readCredentials();
-
-  if (!credentials) {
-    console.log(chalk.red('✗ Not authenticated'));
-    console.log(chalk.gray('  Run "happy auth login" to authenticate'));
-    return;
-  }
-
-  console.log(chalk.bold('\nAccount Information\n'));
-
-  // Public ID (server ID) - from JWT token's sub claim
-  const publicId = parseTokenSub(credentials.token);
-  console.log(`${chalk.cyan('Public ID:')}    ${publicId}`);
-
-  // Anonymous ID - only available for legacy credentials
-  // For dataKey credentials, the CLI receives contentDataKey (a public key),
-  // not the original masterSecret, so we cannot derive the matching anonymous ID
-  if (credentials.encryption.type === 'legacy') {
-    const masterSecret = credentials.encryption.secret;
-    const analyticsKey = await deriveKey(masterSecret, 'Happy Coder', ['analytics', 'id']);
-    const anonId = encodeHex(analyticsKey).slice(0, 16).toLowerCase();
-    console.log(`${chalk.cyan('Anonymous ID:')} ${anonId}`);
-    console.log(chalk.gray('\nThese IDs should match what you see in the webapp under Settings > Account'));
-  } else {
-    console.log(`${chalk.cyan('Anonymous ID:')} ${chalk.yellow('N/A (V2 credentials)')}`);
-    console.log(chalk.gray('\nNote: Anonymous ID is only available with legacy credentials.'));
-    console.log(chalk.gray('The Public ID should match what you see in the webapp under Settings > Account.'));
-  }
-}
