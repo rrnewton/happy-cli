@@ -15,6 +15,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 import tweetnacl from 'tweetnacl';
+import { formatTimeAgo } from '@/utils/time';
 
 export interface ListOptions {
     sessionId?: string;      // -s, --session: filter by session ID (prefix match)
@@ -468,7 +469,7 @@ export async function listSessions(credentials: Credentials, options: ListOption
             console.log(`${indent}Working Directory: ${workingDir}`);
             console.log(`${indent}Host: ${host}`);
             console.log(`${indent}Status: ${thinkingStatus}`);
-            console.log(`${indent}Last Active: ${new Date(session.activeAt).toLocaleString()}`);
+            console.log(`${indent}Last Active: ${formatTimeAgo(session.activeAt)}`);
 
             // Fetch and display recent messages if requested
             if (showMessages && encryptionKey) {
