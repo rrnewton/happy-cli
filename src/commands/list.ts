@@ -219,19 +219,61 @@ async function fetchSessionMessages(
 }
 
 /**
- * Check if a message should be displayed
- * Filters out internal event messages and other non-user-facing content
+ * Extract displayable text content from a message.
+ * Returns null if the message has no displayable content.
  */
-function shouldDisplayMessage(msg: DecryptedMessage): boolean {
-    // Structure: msg.content is the actual message payload
+function extractMessageText(msg: DecryptedMessage): string | null {
     const msgContent = msg.content;
 
-    // Skip internal event messages (e.g., {type: 'event', data: {type: 'ready'}})
-    if (msgContent?.type === 'event') {
-        return false;
+    // Handle string content directly
+    if (typeof msgContent === 'string') {
+        return msgContent.trim() || null;
     }
 
-    return true;
+    // User message: {role: 'user', content: {type: 'text', text: '...'}}
+    if (msgContent?.type === 'text' && msgContent?.text) {
+        return String(msgContent.text).trim() || null;
+    }
+
+    // Agent output: {role: 'agent', content: {type: 'output', data: {message: {content: [{type: 'text', text: '...'}]}}}}
+    if (msgContent?.type === 'output' && msgContent?.data?.message?.content) {
+        const messageContent = msgContent.data.message.content;
+        if (Array.isArray(messageContent)) {
+            const text = messageContent
+                .filter((c: any) => c.type === 'text')
+                .map((c: any) => c.text)
+                .join('\n')
+                .trim();
+            return text || null;
+        } else if (typeof messageContent === 'string') {
+            return messageContent.trim() || null;
+        }
+    }
+
+    // Claude-style content array at top level
+    if (Array.isArray(msgContent)) {
+        const text = msgContent
+            .filter((c: any) => c.type === 'text')
+            .map((c: any) => c.text)
+            .join('\n')
+            .trim();
+        return text || null;
+    }
+
+    // Skip event messages entirely
+    if (msgContent?.type === 'event') {
+        return null;
+    }
+
+    return null;
+}
+
+/**
+ * Check if a message should be displayed
+ * Filters out internal event messages, empty messages, and other non-user-facing content
+ */
+function shouldDisplayMessage(msg: DecryptedMessage): boolean {
+    return extractMessageText(msg) !== null;
 }
 
 /**
@@ -255,35 +297,8 @@ function formatMessage(msg: DecryptedMessage, indent: string = '', maxLen: numbe
         prefix = `[${role || 'unknown'}]`;
     }
 
-    // Extract display content based on message structure
-    let content = '';
-    const msgContent = msg.content;
-
-    if (typeof msgContent === 'string') {
-        content = msgContent;
-    } else if (msgContent?.type === 'text' && msgContent?.text) {
-        // User message: {type: 'text', text: '...'}
-        content = msgContent.text;
-    } else if (msgContent?.type === 'output' && msgContent?.data?.message?.content) {
-        // Agent output: extract text from message.content array
-        const messageContent = msgContent.data.message.content;
-        if (Array.isArray(messageContent)) {
-            content = messageContent
-                .filter((c: any) => c.type === 'text')
-                .map((c: any) => c.text)
-                .join('\n');
-        } else if (typeof messageContent === 'string') {
-            content = messageContent;
-        }
-    } else if (Array.isArray(msgContent)) {
-        // Claude-style content array
-        content = msgContent
-            .filter((c: any) => c.type === 'text')
-            .map((c: any) => c.text)
-            .join('\n');
-    } else {
-        content = JSON.stringify(msgContent || msg, null, 2);
-    }
+    // Extract display content using shared extraction logic
+    let content = extractMessageText(msg) || '';
 
     // Truncate long messages (maxLen < 0 means unlimited)
     if (maxLen >= 0 && content.length > maxLen) {
