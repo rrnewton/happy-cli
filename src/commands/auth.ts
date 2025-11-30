@@ -274,9 +274,23 @@ function parseTokenSub(token: string): string {
 }
 
 /**
- * Fetch account profile from the server
+ * Result of validating account with the server
  */
-async function fetchAccountProfile(token: string): Promise<{ username: string | null; firstName: string | null; lastName: string | null } | null> {
+interface AccountValidationResult {
+  valid: boolean;
+  profile?: { username: string | null; firstName: string | null; lastName: string | null };
+  error?: 'network_error' | 'account_not_found' | 'auth_error' | 'server_error';
+  errorMessage?: string;
+}
+
+/**
+ * Validate that the account exists on the server and fetch profile
+ * This is a CRITICAL check - we must distinguish between:
+ * - Account exists and is valid
+ * - Account does NOT exist (credentials are stale/invalid)
+ * - Network/server errors (temporary issues)
+ */
+async function validateAccountWithServer(token: string): Promise<AccountValidationResult> {
   try {
     const response = await axios.get(`${configuration.serverUrl}/v1/account/profile`, {
       headers: {
@@ -286,13 +300,68 @@ async function fetchAccountProfile(token: string): Promise<{ username: string | 
       timeout: 10000
     });
     return {
-      username: response.data.username,
-      firstName: response.data.firstName,
-      lastName: response.data.lastName
+      valid: true,
+      profile: {
+        username: response.data.username,
+        firstName: response.data.firstName,
+        lastName: response.data.lastName
+      }
     };
   } catch (error) {
-    logger.debug('Failed to fetch account profile:', error);
-    return null;
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+
+      // 401/403 - Authentication/authorization error (token invalid or account doesn't exist)
+      if (status === 401 || status === 403) {
+        return {
+          valid: false,
+          error: 'auth_error',
+          errorMessage: 'Authentication failed - your credentials may be invalid or expired'
+        };
+      }
+
+      // 404 or 500 with P2025 (Prisma record not found) - Account doesn't exist
+      // The server returns 500 with Prisma errors when account is missing
+      if (status === 404 || status === 500) {
+        const responseData = error.response?.data;
+        const isAccountNotFound =
+          status === 404 ||
+          (responseData?.errorCode === 'P2025') ||
+          (typeof responseData === 'string' && responseData.includes('P2025')) ||
+          (responseData?.message?.includes('not found'));
+
+        if (isAccountNotFound || status === 500) {
+          return {
+            valid: false,
+            error: 'account_not_found',
+            errorMessage: 'Account not found on server - your credentials are stale. Run "happy auth logout" and re-authenticate.'
+          };
+        }
+
+        return {
+          valid: false,
+          error: 'server_error',
+          errorMessage: `Server error (${status}): ${error.message}`
+        };
+      }
+
+      // Network errors (ECONNREFUSED, ETIMEDOUT, etc.)
+      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+        return {
+          valid: false,
+          error: 'network_error',
+          errorMessage: `Cannot reach server at ${configuration.serverUrl}: ${error.code}`
+        };
+      }
+    }
+
+    // Generic network/unknown error
+    logger.debug('Failed to validate account:', error);
+    return {
+      valid: false,
+      error: 'network_error',
+      errorMessage: error instanceof Error ? error.message : 'Unknown error connecting to server'
+    };
   }
 }
 
@@ -313,18 +382,55 @@ async function handleAuthStatus(): Promise<void> {
     return;
   }
 
-  console.log(chalk.green('✓ Authenticated'));
+  // CRITICAL: Validate that the account actually exists on the server
+  // This catches the case where credentials are stale (e.g., database was wiped)
+  console.log(chalk.gray('Validating credentials with server...'));
+  const validation = await validateAccountWithServer(credentials.token);
 
-  // Fetch and display account info
-  const profile = await fetchAccountProfile(credentials.token);
-  if (profile) {
-    if (profile.username) {
-      console.log(chalk.gray(`  Username: ${profile.username}`));
+  if (!validation.valid) {
+    // Account validation failed - this is a CRITICAL error
+    if (validation.error === 'account_not_found' || validation.error === 'auth_error') {
+      console.log(chalk.red.bold('\n❌ AUTHENTICATION INVALID'));
+      console.log(chalk.red(`   ${validation.errorMessage}`));
+      console.log('');
+      console.log(chalk.yellow('Your local credentials do not match any account on the server.'));
+      console.log(chalk.yellow('This can happen if:'));
+      console.log(chalk.gray('  • The database was reset or migrated'));
+      console.log(chalk.gray('  • You are pointing to a different server'));
+      console.log(chalk.gray('  • Your account was deleted'));
+      console.log('');
+      console.log(chalk.cyan('To fix this, run:'));
+      console.log(chalk.white('  happy auth logout'));
+      console.log(chalk.white('  happy auth login'));
+      console.log('');
+      process.exit(1);
+    } else if (validation.error === 'network_error') {
+      console.log(chalk.yellow(`\n⚠️  Cannot verify credentials: ${validation.errorMessage}`));
+      console.log(chalk.gray('  Server may be unreachable. Showing local credentials status only.\n'));
+      // Continue to show local status, but warn user
+    } else {
+      console.log(chalk.yellow(`\n⚠️  Server error: ${validation.errorMessage}`));
+      console.log(chalk.gray('  Showing local credentials status only.\n'));
     }
-    const displayName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
-    if (displayName) {
-      console.log(chalk.gray(`  Name: ${displayName}`));
+  }
+
+  // Only show "Authenticated" if we actually validated with the server
+  if (validation.valid) {
+    console.log(chalk.green('✓ Authenticated (verified with server)'));
+
+    // Show profile info from validated response
+    if (validation.profile) {
+      if (validation.profile.username) {
+        console.log(chalk.gray(`  Username: ${validation.profile.username}`));
+      }
+      const displayName = [validation.profile.firstName, validation.profile.lastName].filter(Boolean).join(' ');
+      if (displayName) {
+        console.log(chalk.gray(`  Name: ${displayName}`));
+      }
     }
+  } else if (validation.error === 'network_error') {
+    // Network error - show local state with warning
+    console.log(chalk.yellow('⚠️  Credentials found (unverified - server unreachable)'));
   }
 
   // Public ID from JWT

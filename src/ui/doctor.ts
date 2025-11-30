@@ -1,11 +1,15 @@
 /**
  * Doctor command implementation
- * 
+ *
  * Provides comprehensive diagnostics and troubleshooting information
- * for happy CLI including configuration, daemon status, logs, and links
+ * for happy CLI including configuration, daemon status, logs, and links.
+ *
+ * IMPORTANT: The doctor must track critical issues and NOT give false
+ * reassurance when there are real problems. Fail early, fail loudly.
  */
 
 import chalk from 'chalk'
+import axios from 'axios'
 import { configuration } from '@/configuration'
 import { readSettings, readCredentials } from '@/persistence'
 import { checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient'
@@ -16,6 +20,41 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectPath } from '@/projectPath'
 import packageJson from '../../package.json'
+
+/**
+ * Track critical issues found during diagnosis
+ */
+interface DiagnosticIssues {
+  critical: string[];  // Issues that prevent happy from working
+  warnings: string[];  // Issues that may cause problems
+}
+
+/**
+ * Validate that credentials are valid with the server
+ */
+async function validateCredentialsWithServer(token: string): Promise<{ valid: boolean; error?: string }> {
+  try {
+    await axios.get(`${configuration.serverUrl}/v1/account/profile`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+    return { valid: true };
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      if (status === 401 || status === 403 || status === 404 || status === 500) {
+        return { valid: false, error: 'Account not found or credentials invalid' };
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+        return { valid: false, error: `Cannot reach server: ${error.code}` };
+      }
+    }
+    return { valid: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
 
 /**
  * Get relevant environment information for debugging
@@ -76,7 +115,13 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
     if (!filter) {
         filter = 'all';
     }
-    
+
+    // Track issues found during diagnosis
+    const issues: DiagnosticIssues = {
+        critical: [],
+        warnings: []
+    };
+
     console.log(chalk.bold.cyan('\n🩺 Happy CLI Doctor\n'));
 
     // For 'all' filter, show everything. For 'daemon', only show daemon-related info
@@ -93,7 +138,7 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         const projectRoot = projectPath();
         const wrapperPath = join(projectRoot, 'bin', 'happy.mjs');
         const cliEntrypoint = join(projectRoot, 'dist', 'index.mjs');
-        
+
         console.log(`Project Root: ${chalk.blue(projectRoot)}`);
         console.log(`Wrapper Script: ${chalk.blue(wrapperPath)}`);
         console.log(`CLI Entrypoint: ${chalk.blue(cliEntrypoint)}`);
@@ -124,19 +169,32 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         } catch (error) {
             console.log(chalk.bold('\n📄 Settings:'));
             console.log(chalk.red('❌ Failed to read settings'));
+            issues.warnings.push('Failed to read settings.json');
         }
 
-        // Authentication status
+        // Authentication status - WITH SERVER VALIDATION
         console.log(chalk.bold('\n🔐 Authentication'));
         try {
             const credentials = await readCredentials();
             if (credentials) {
-                console.log(chalk.green('✓ Authenticated (credentials found)'));
+                console.log(chalk.gray('  Validating credentials with server...'));
+                const validation = await validateCredentialsWithServer(credentials.token);
+                if (validation.valid) {
+                    console.log(chalk.green('✓ Authenticated (verified with server)'));
+                } else {
+                    console.log(chalk.red.bold('❌ CREDENTIALS INVALID'));
+                    console.log(chalk.red(`   ${validation.error}`));
+                    console.log(chalk.yellow('   Your local credentials do not match any account on the server.'));
+                    console.log(chalk.cyan('   Fix: Run "happy auth logout" then "happy auth login"'));
+                    issues.critical.push(`Credentials invalid: ${validation.error}`);
+                }
             } else {
                 console.log(chalk.yellow('⚠️  Not authenticated (no credentials)'));
+                issues.warnings.push('Not authenticated');
             }
         } catch (error) {
             console.log(chalk.red('❌ Error reading credentials'));
+            issues.warnings.push('Error reading credentials');
         }
     }
 
@@ -265,5 +323,25 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         console.log(`Documentation: ${chalk.blue('https://happy.engineering/')}`);
     }
 
-    console.log(chalk.green('\n✅ Doctor diagnosis complete!\n'));
+    // Final diagnosis summary - DO NOT give false reassurance!
+    console.log('');
+    if (issues.critical.length > 0) {
+        console.log(chalk.red.bold('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        console.log(chalk.red.bold('❌ CRITICAL ISSUES FOUND'));
+        console.log(chalk.red.bold('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        issues.critical.forEach(issue => {
+            console.log(chalk.red(`  • ${issue}`));
+        });
+        console.log('');
+        console.log(chalk.yellow('These issues must be fixed before happy will work correctly.'));
+        console.log('');
+    } else if (issues.warnings.length > 0) {
+        console.log(chalk.yellow.bold('⚠️  Diagnosis complete with warnings:'));
+        issues.warnings.forEach(issue => {
+            console.log(chalk.yellow(`  • ${issue}`));
+        });
+        console.log('');
+    } else {
+        console.log(chalk.green('✅ Doctor diagnosis complete - no issues found!\n'));
+    }
 }
