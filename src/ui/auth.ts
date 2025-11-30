@@ -17,6 +17,9 @@ import { logger } from './logger';
 export async function doAuth(): Promise<Credentials | null> {
     console.clear();
 
+    // Show which server we're connecting to
+    console.log(`Connecting to: ${configuration.serverUrl}\n`);
+
     // Show authentication method selector
     const authMethod = await selectAuthenticationMethod();
     if (!authMethod) {
@@ -30,15 +33,15 @@ export async function doAuth(): Promise<Credentials | null> {
 
     // Create a new authentication request
     try {
-        console.log(`[AUTH DEBUG] Sending auth request to: ${configuration.serverUrl}/v1/auth/request`);
-        console.log(`[AUTH DEBUG] Public key: ${encodeBase64(keypair.publicKey).substring(0, 20)}...`);
+        logger.debug(`[AUTH] Sending auth request to: ${configuration.serverUrl}/v1/auth/request`);
+        logger.debug(`[AUTH] Public key: ${encodeBase64(keypair.publicKey).substring(0, 20)}...`);
         await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
             publicKey: encodeBase64(keypair.publicKey),
             supportsV2: true
         });
-        console.log(`[AUTH DEBUG] Auth request sent successfully`);
+        logger.debug(`[AUTH] Auth request sent successfully`);
     } catch (error) {
-        console.log(`[AUTH DEBUG] Failed to send auth request:`, error);
+        logger.debug(`[AUTH] Failed to send auth request:`, error);
         console.log('Failed to create authentication request, please try again later.');
         return null;
     }

@@ -115,6 +115,7 @@ async function handleAuthLogin(args: string[]): Promise<void> {
 
     if (existingCreds && settings?.machineId) {
       console.log(chalk.green('✓ Already authenticated'));
+      console.log(chalk.gray(`  Server: ${configuration.serverUrl}`));
       console.log(chalk.gray(`  Machine ID: ${settings.machineId}`));
       console.log(chalk.gray(`  Host: ${os.hostname()}`));
       console.log(chalk.gray(`  Use 'happy auth login --force' to re-authenticate`));
@@ -131,7 +132,9 @@ async function handleAuthLogin(args: string[]): Promise<void> {
   try {
     const result = await authAndSetupMachineIfNeeded();
     console.log(chalk.green('\n✓ Authentication successful'));
+    console.log(chalk.gray(`  Server: ${configuration.serverUrl}`));
     console.log(chalk.gray(`  Machine ID: ${result.machineId}`));
+    console.log(chalk.gray(`  Host: ${os.hostname()}`));
   } catch (error) {
     console.error(chalk.red('Authentication failed:'), error instanceof Error ? error.message : 'Unknown error');
     process.exit(1);
