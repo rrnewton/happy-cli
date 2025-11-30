@@ -154,6 +154,17 @@ export class ApiMachineClient {
 
             return { message: 'Daemon stop request acknowledged, starting shutdown sequence...' };
         });
+
+        // Register ping handler - returns daemon status for connectivity testing
+        this.rpcHandlerManager.registerHandler('ping', () => {
+            logger.debug('[API MACHINE] Received ping RPC request');
+            return {
+                status: 'alive',
+                timestamp: Date.now(),
+                uptime: process.uptime(),
+                machineId: this.machine.id
+            };
+        });
     }
 
     /**
