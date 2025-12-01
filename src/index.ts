@@ -388,8 +388,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
         unknownArgs.push(arg)
       } else if (arg === '-v' || arg === '--version') {
         showVersion = true
-        // Also pass through to claude (will show after our version)
-        unknownArgs.push(arg)
+        // Exit immediately after showing version, don't pass to claude
       } else if (arg === '--happy-starting-mode') {
         options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
       } else if (arg === '--yolo' || arg === '--dangerously-skip-permissions') {
@@ -462,10 +461,10 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
       process.exit(0)
     }
 
-    // Show version
+    // Show version and exit immediately (no auth required)
     if (showVersion) {
       console.log(`happy version: ${packageJson.version} (rrnewton fork)`)
-      // Don't exit - continue to pass --version to Claude Code
+      process.exit(0)
     }
 
     // Normal flow - auth and machine setup
