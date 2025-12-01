@@ -40,10 +40,17 @@ interface MessageContent {
     };
 }
 
+/** Default timeout in minutes */
+const DEFAULT_TIMEOUT_MINUTES = 20;
+
 /**
  * Send a prompt to a session and wait for completion
+ * @param credentials - User credentials
+ * @param sessionId - Session ID to send prompt to
+ * @param promptText - Prompt text to send
+ * @param timeoutMinutes - Timeout in minutes (default: 20)
  */
-export async function promptSession(credentials: Credentials, sessionId: string, promptText: string): Promise<void> {
+export async function promptSession(credentials: Credentials, sessionId: string, promptText: string, timeoutMinutes: number = DEFAULT_TIMEOUT_MINUTES): Promise<void> {
     try {
         const serverUrl = configuration.serverUrl;
 
@@ -254,13 +261,14 @@ export async function promptSession(credentials: Credentials, sessionId: string,
             }
         }, 500);
 
-        // Timeout after 5 minutes
+        // Timeout after configured minutes (default 20)
+        const timeoutMs = timeoutMinutes * 60 * 1000;
         setTimeout(() => {
             clearInterval(checkInterval);
             socket.close();
-            console.error('\nTimeout waiting for Claude to complete.');
+            console.error(`\nTimeout waiting for Claude to complete (${timeoutMinutes} minutes).`);
             process.exit(1);
-        }, 5 * 60 * 1000);
+        }, timeoutMs);
 
     } catch (error) {
         if (axios.isAxiosError(error)) {

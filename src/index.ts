@@ -194,12 +194,20 @@ Examples:
       // Parse arguments
       let sessionId: string | null = null;
       let promptText: string | null = null;
+      let timeoutMinutes: number | null = null;
 
       for (let i = 1; i < args.length; i++) {
         if (args[i] === '-s' || args[i] === '--session') {
           sessionId = args[++i];
         } else if (args[i] === '-p' || args[i] === '--prompt') {
           promptText = args[++i];
+        } else if (args[i] === '-t' || args[i] === '--timeout') {
+          const value = parseInt(args[++i], 10);
+          if (isNaN(value) || value <= 0) {
+            console.error('Timeout must be a positive number (minutes).');
+            process.exit(1);
+          }
+          timeoutMinutes = value;
         } else if (args[i] === '-h' || args[i] === '--help') {
           console.log(`
 Usage: happy prompt [options]
@@ -209,11 +217,13 @@ Send a prompt to an active session.
 Options:
   -s, --session <id>     Session ID to send prompt to (required)
   -p, --prompt <text>    Prompt text to send (required)
+  -t, --timeout <min>    Timeout in minutes (default: 20)
   -h, --help             Show this help message
 
 Examples:
   happy prompt -s cmed556s -p "Hello, what can you help me with?"
   happy prompt --session abc123 --prompt "List files in current directory"
+  happy prompt -s abc123 -p "Run the full test suite" --timeout 60
 `);
           return;
         }
@@ -235,7 +245,7 @@ Examples:
 
       const { credentials } = await authAndSetupMachineIfNeeded();
       const { promptSession } = await import('@/commands/prompt');
-      await promptSession(credentials, sessionId, promptText);
+      await promptSession(credentials, sessionId, promptText, timeoutMinutes ?? undefined);
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {
