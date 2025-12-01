@@ -100,6 +100,7 @@ export async function promptSession(credentials: Credentials, sessionId: string,
         let isThinking = false;
         let hasStartedThinking = false;
         let completed = false;
+        let hasError = false;
 
         // Handle connection
         await new Promise<void>((resolve, reject) => {
@@ -145,8 +146,17 @@ export async function promptSession(credentials: Credentials, sessionId: string,
                         const output = content.content.data;
                         // Format and display Claude's output based on message type
                         if (output.type === 'user' && output.message?.content) {
-                            // This shouldn't happen but handle it
+                            // User message - could be tool result with is_error
                             console.log('[User]:', output.message.content);
+                            // Check for error in tool results
+                            if (Array.isArray(output.message.content)) {
+                                for (const block of output.message.content) {
+                                    if (block.is_error === true) {
+                                        hasError = true;
+                                        logger.debug('[prompt] Detected error in tool result');
+                                    }
+                                }
+                            }
                         } else if (output.type === 'assistant' && output.message?.content) {
                             // Assistant message - could be text or tool use
                             if (Array.isArray(output.message.content)) {
@@ -239,7 +249,8 @@ export async function promptSession(credentials: Credentials, sessionId: string,
                 clearInterval(checkInterval);
                 socket.close();
                 console.log('\n[Claude has finished]');
-                process.exit(0);
+                // Exit with error code if any tool result had is_error: true
+                process.exit(hasError ? 1 : 0);
             }
         }, 500);
 
