@@ -70,6 +70,7 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "2.0.55",
     "@anthropic-ai/sdk": "0.65.0",
+    "@elevenlabs/elevenlabs-js": "^2.25.1",
     "@modelcontextprotocol/sdk": "^1.15.1",
     "@stablelib/base64": "^2.0.1",
     "@stablelib/hex": "^2.0.1",
