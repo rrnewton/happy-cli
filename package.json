@@ -1,5 +1,5 @@
 {
-  "name": "happy-coder",
+  "name": "@zhigang1992/happy-cli",
   "version": "0.12.1",
   "description": "Mobile and Web client for Claude Code and Codex",
   "author": "Kirill Dubovitskiy",
