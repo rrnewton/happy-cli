@@ -10,6 +10,7 @@ import {
     RpcHandlerMap,
     RpcRequest,
     RpcHandlerConfig,
+    RpcSessionContext,
 } from './types';
 import { Socket } from 'socket.io-client';
 
@@ -20,12 +21,31 @@ export class RpcHandlerManager {
     private readonly encryptionVariant: 'legacy' | 'dataKey';
     private readonly logger: (message: string, data?: any) => void;
     private socket: Socket | null = null;
+    private sessionContext: RpcSessionContext | null = null;
 
     constructor(config: RpcHandlerConfig) {
         this.scopePrefix = config.scopePrefix;
         this.encryptionKey = config.encryptionKey;
         this.encryptionVariant = config.encryptionVariant;
         this.logger = config.logger || ((msg, data) => defaultLogger.debug(msg, data));
+    }
+
+    /**
+     * Set the session context (path and environment)
+     * This should be called after direnv environment is loaded
+     * @param context - The session context with path and environment
+     */
+    setSessionContext(context: RpcSessionContext): void {
+        this.sessionContext = context;
+        this.logger('[RPC] Session context set', { path: context.path, envVarCount: Object.keys(context.env).length });
+    }
+
+    /**
+     * Get the current session context
+     * @returns The session context or null if not set
+     */
+    getSessionContext(): RpcSessionContext | null {
+        return this.sessionContext;
     }
 
     /**

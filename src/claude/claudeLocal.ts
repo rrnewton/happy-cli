@@ -8,6 +8,7 @@ import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { getProjectPath } from "./utils/path";
 import { projectPath } from "@/projectPath";
 import { systemPrompt } from "./utils/systemPrompt";
+import { loadDirenvEnvironment } from "@/utils/direnv";
 
 
 // Get Claude CLI path from project root
@@ -75,6 +76,20 @@ export async function claudeLocal(opts: {
 
     // Spawn the process
     try {
+        // Load direnv environment for the working directory (before Promise to avoid async issues)
+        const direnvVars = await loadDirenvEnvironment(opts.path);
+        if (Object.keys(direnvVars).length > 0) {
+            logger.debug(`[ClaudeLocal] Loaded ${Object.keys(direnvVars).length} direnv environment variables`);
+        }
+
+        // Prepare environment variables
+        // Order: process.env < direnv < explicit claudeEnvVars
+        const env = {
+            ...process.env,
+            ...direnvVars,
+            ...opts.claudeEnvVars
+        }
+
         // Start the interactive process
         process.stdin.pause();
         await new Promise<void>((r, reject) => {
@@ -99,12 +114,6 @@ export async function claudeLocal(opts: {
 
             if (!claudeCliPath || !existsSync(claudeCliPath)) {
                 throw new Error('Claude local launcher not found. Please ensure HAPPY_PROJECT_ROOT is set correctly for development.');
-            }
-
-            // Prepare environment variables
-            const env = {
-                ...process.env,
-                ...opts.claudeEnvVars
             }
 
             const child = spawn('node', [claudeCliPath, ...args], {

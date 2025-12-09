@@ -5,6 +5,7 @@ import { Session } from "./session"
 import { claudeLocalLauncher } from "./claudeLocalLauncher"
 import { claudeRemoteLauncher } from "./claudeRemoteLauncher"
 import { ApiClient } from "@/lib"
+import { loadAndMergeEnvironment } from "@/utils/direnv"
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
@@ -38,6 +39,23 @@ export async function loop(opts: LoopOptions) {
 
     // Get log path for debug display
     const logPath = logger.logFilePath;
+
+    // Load direnv environment for the working directory
+    // This merges: process.env < direnv < explicit claudeEnvVars
+    const sessionEnv = await loadAndMergeEnvironment(
+        opts.path,
+        process.env,
+        opts.claudeEnvVars ?? {}
+    );
+    logger.debug(`[loop] Loaded session environment with ${Object.keys(sessionEnv).length} variables`);
+
+    // Set session context on RPC handler manager so RPC calls (like bash from MCP)
+    // can access the direnv environment
+    opts.session.rpcHandlerManager.setSessionContext({
+        path: opts.path,
+        env: sessionEnv
+    });
+
     let session = new Session({
         api: opts.api,
         client: opts.session,

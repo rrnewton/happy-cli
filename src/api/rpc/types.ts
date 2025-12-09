@@ -3,6 +3,17 @@
  */
 
 /**
+ * Session context for RPC handlers
+ * Contains environment and path information for the current session
+ */
+export interface RpcSessionContext {
+    /** Working directory path for the session */
+    path: string;
+    /** Environment variables (includes direnv if available) */
+    env: Record<string, string>;
+}
+
+/**
  * Generic RPC handler function type
  * @template TRequest - The request data type
  * @template TResponse - The response data type

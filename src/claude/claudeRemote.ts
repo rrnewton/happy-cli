@@ -10,6 +10,7 @@ import { getProjectPath } from "./utils/path";
 import { awaitFileExist } from "@/modules/watcher/awaitFileExist";
 import { systemPrompt } from "./utils/systemPrompt";
 import { PermissionResult } from "./sdk/types";
+import { loadDirenvEnvironment } from "@/utils/direnv";
 
 export async function claudeRemote(opts: {
 
@@ -68,7 +69,20 @@ export async function claudeRemote(opts: {
         }
     }
 
+    // Load direnv environment for the working directory
+    const direnvVars = await loadDirenvEnvironment(opts.path);
+    if (Object.keys(direnvVars).length > 0) {
+        logger.debug(`[claudeRemote] Loaded ${Object.keys(direnvVars).length} direnv environment variables`);
+    }
+
     // Set environment variables for Claude Code SDK
+    // Order: process.env < direnv < explicit claudeEnvVars
+    // Apply direnv variables first
+    Object.entries(direnvVars).forEach(([key, value]) => {
+        process.env[key] = value;
+    });
+
+    // Then apply explicit claudeEnvVars (highest priority)
     if (opts.claudeEnvVars) {
         Object.entries(opts.claudeEnvVars).forEach(([key, value]) => {
             process.env[key] = value;

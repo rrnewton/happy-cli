@@ -138,11 +138,16 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
         logger.debug('Shell command request:', data.command);
 
         try {
+            // Get session context for environment variables (includes direnv if loaded)
+            const sessionContext = rpcHandlerManager.getSessionContext();
+
             // Build options with shell enabled by default
             // Note: ExecOptions doesn't support boolean for shell, but exec() uses the default shell when shell is undefined
             const options: ExecOptions = {
                 cwd: data.cwd,
                 timeout: data.timeout || 30000, // Default 30 seconds timeout
+                // Use session environment if available, otherwise inherit process.env
+                env: sessionContext?.env ?? (process.env as Record<string, string>),
             };
 
             const { stdout, stderr } = await execAsync(data.command, options);
